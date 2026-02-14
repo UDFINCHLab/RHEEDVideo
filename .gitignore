@@ -13,7 +13,6 @@ venv/
 # ---------------------------
 # Runtime outputs
 # ---------------------------
-captures/
 results/
 roi_data/
 *.log

@@ -3,9 +3,14 @@ import sys
 import cv2
 import numpy as np
 import time
+import datetime
 from camera import Camera
 from dummy_camera import DummyCamera
 from roi_manager import ROIManager
+from config import VIDEO_OUTPUT_DIR
+from pathlib import Path
+
+
 
 
 # ---------------------- aspect ratio helper ----------------------
@@ -494,12 +499,22 @@ def main():
                     if last_gray_shape is None:
                         print("⚠️ Cannot start ML capture: no frame yet.")
                     else:
-                        os.makedirs("captures", exist_ok=True)
-                        ts_str = time.strftime("%Y%m%d_%H%M%S")
-                        ml_filename = os.path.join("captures", f"capture_{ts_str}.mp4")
+                        timestamp = datetime.datetime.now()
+
+                        final_output_path = (
+                            VIDEO_OUTPUT_DIR
+                            / f"{timestamp.strftime('%Y')}"
+                            / f"{timestamp.strftime('%B')}"
+                            / f"{timestamp.strftime('%m%d%y')}"
+                        )
+
+                        final_output_path.mkdir(parents=True, exist_ok=True)
+
+                        ml_filename = final_output_path / f"RHEED_video_{timestamp.strftime('%m-%d-%y_%H-%M-%S')}.mp4"
+
                         h, w = last_gray_shape
                         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-                        ml_writer = cv2.VideoWriter(ml_filename, fourcc, 30.0, (w, h), True)
+                        ml_writer = cv2.VideoWriter(str(ml_filename), fourcc, 30.0, (w, h), True)
 
                         if not ml_writer.isOpened():
                             print("❌ Failed to open VideoWriter for ML capture.")
