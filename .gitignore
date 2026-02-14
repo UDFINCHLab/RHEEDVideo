@@ -1,14 +1,48 @@
-# Python cache
+# ---------------------------
+# Python cache / bytecode
+# ---------------------------
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
 
+# Virtual environments
+venv/
+.env/
+.venv/
+
+# ---------------------------
 # Runtime outputs
+# ---------------------------
 captures/
 results/
+*.log
 
-# Third party binaries
+# ---------------------------
+# Third-party binaries
+# ---------------------------
 third_party/
+*.whl
 
+# ---------------------------
+# Build / packaging
+# ---------------------------
+build/
+dist/
+*.egg-info/
+
+# ---------------------------
+# Jupyter / notebooks
+# ---------------------------
+.ipynb_checkpoints/
+
+# ---------------------------
+# IDE / Editor
+# ---------------------------
+.vscode/
+.idea/
+
+# ---------------------------
 # OS files
+# ---------------------------
 .DS_Store
 Thumbs.db
