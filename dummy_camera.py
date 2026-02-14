@@ -129,3 +129,6 @@ class DummyCamera:
         self.gamma = float(max(self.gamma_min, min(self.gamma_max, float(gamma_value))))
         self.gamma_enabled = True
         return self.gamma
+    
+    def get_fps(self):
+        return float(self.fps)

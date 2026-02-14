@@ -3,7 +3,9 @@ import numpy as np
 from collections import deque
 import pandas as pd
 import datetime
-import pathlib as path
+from pathlib import Path
+from config import ROI_OUTPUT_DIR
+
 
 ROI_COLORS = {1: (255, 0, 0), 2: (0, 165, 255)}  # Blue / Orange
 
@@ -20,9 +22,9 @@ class ROIManager:
         self.temp_roi = None
         self.roi_saves=0
         
-        self.roi_main_directory=path.Path(r"C:\Users\ComesLab\Documents\DATA\RHEED") #This needs to be changed before putting in the public repository. It shouldn't be hard-coded
-        if not self.roi_main_directory.is_dir():
-            self.roi_main_directory.mkdir()
+        self.roi_main_directory = ROI_OUTPUT_DIR
+        self.roi_main_directory.mkdir(parents=True, exist_ok=True)
+
 
 
         # NEW: shape toggle → "ellipse" or "rect"

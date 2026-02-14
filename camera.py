@@ -234,3 +234,6 @@ class Camera:
         gamma_node.SetValue(v)
         self.gamma = float(gamma_node.GetValue())
         return self.gamma
+
+    def get_fps(self):
+        return float(self.cam.AcquisitionFrameRate())

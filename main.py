@@ -342,7 +342,7 @@ def main():
             # footer bar
             feed_bar = np.zeros((24, disp.shape[1], 3), np.uint8)
             cv2.putText(feed_bar,
-                        f"Pixel Int: {float(np.mean(gray)):.1f} | FPS: {np.round(cam.cam.AcquisitionFrameRate(),decimals=2)} | Frame: {frame_idx}",
+                        f"Pixel Int: {float(np.mean(gray)):.1f} | FPS: {np.round(cam.get_fps(), 2)} | Frame: {frame_idx}",
                         (10, 18), cv2.FONT_HERSHEY_SIMPLEX,
                         .85, (230, 230, 230), 2, cv2.LINE_AA)
             right_block = np.vstack([disp, feed_bar])
