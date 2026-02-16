@@ -348,7 +348,7 @@ def main():
 
 
             # FULLSCREEN ROI VIEW
-            if fullscreen_roi in (1, 2):
+            if fullscreen_roi is not None:
                 chart, _ = render_chart(
                     roi.rois.get(fullscreen_roi),
                     1280, 930, now,
@@ -469,6 +469,75 @@ def main():
 
             key = cv2.waitKey(1) & 0xFF
             window_status=cv2.getWindowProperty("RHEED Dashboard", cv2.WND_PROP_VISIBLE)
+            
+            
+            # ----- ROI Monitor Popout -----
+            extra_rois = sorted(roi.rois.keys())[2:]  # ROI 3+
+            if len(extra_rois) > 0:
+                cv2.namedWindow("RHEED ROI Monitor", cv2.WINDOW_NORMAL)
+
+                max_extra = 6
+                extra_rois = extra_rois[:max_extra]
+
+                cols = 3
+                rows = 2
+
+                # Get current popup window size (so maximize/resize works)
+                try:
+                    _, _, pop_w, pop_h = cv2.getWindowImageRect("RHEED ROI Monitor")
+                except:
+                    pop_w, pop_h = 1200, 700
+
+                # Avoid tiny sizes (prevents crashes / bad layout)
+                pop_w = max(pop_w, 600)
+                pop_h = max(pop_h, 400)
+
+                cell_w = pop_w // cols
+                cell_h = pop_h // rows
+
+                popup_w = cols * cell_w
+                popup_h = rows * cell_h
+
+
+                popup = np.zeros((popup_h, popup_w, 3), dtype=np.uint8)
+
+                for idx, rid in enumerate(extra_rois):
+                    r = idx // cols
+                    c = idx % cols
+
+                    chart, stats = render_chart(
+                        roi.rois.get(rid),
+                        cell_w,
+                        cell_h - 22,   # leave space for footer
+                        now,
+                        f"ROI {rid}",
+                        {}
+                    )
+
+                    footer = np.full((22, cell_w, 3), 235, np.uint8)
+                    text = f"Data Pt:{stats[0]:>4} | Elapsed:{stats[1]:>6.1f}s | Min:{stats[2]:>6.1f} | Max:{stats[3]:>6.1f}"
+                    cv2.putText(footer, text, (6, 15),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                                (60, 60, 60), 1, cv2.LINE_AA)
+
+                    cell = np.vstack([chart, footer])
+
+
+                    y0 = r * cell_h
+                    x0 = c * cell_w
+
+                    popup[y0:y0 + cell_h, x0:x0 + cell_w] = cell
+
+
+                cv2.imshow("RHEED ROI Monitor", popup)
+
+            else:
+                try:
+                    cv2.destroyWindow("RHEED ROI Monitor")
+                except:
+                    pass
+
+
 
             # quit
             if key == ord('q') or key == ord('Q') or window_status==0:

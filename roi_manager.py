@@ -7,7 +7,17 @@ from pathlib import Path
 from config import ROI_OUTPUT_DIR
 
 
-ROI_COLORS = {1: (255, 0, 0), 2: (0, 165, 255)}  # Blue / Orange
+ROI_COLORS = {
+    1: (255, 0, 0),       # Blue
+    2: (0, 165, 255),     # Orange
+    3: (0, 255, 0),       # Green
+    4: (255, 0, 255),     # Magenta
+    5: (0, 255, 255),     # Yellow
+    6: (255, 255, 0),     # Cyan
+    7: (128, 0, 255),     # Purple
+    8: (0, 128, 255),     # Light Orange
+}
+
 
 class ROIManager:
     """Manages two ROIs (ellipse or rectangle) with mouse + keyboard interaction."""
@@ -38,10 +48,13 @@ class ROIManager:
 
     # ---------- helpers ----------
     def _allocate_id(self):
-        for rid in (1, 2):
+        for rid in range(1, 9):   # Allow only 1–8
             if rid not in self.rois:
                 return rid
+        print("⚠️ Max 8 ROIs reached.")
         return None
+
+
 
     def _new_roi(self, rid, center, rx, ry, shape=None):
         return {
@@ -71,9 +84,7 @@ class ROIManager:
 
     # ---------- draw / move / resize ----------
     def start_drawing(self, x, y):
-        if len(self.rois) >= 2:
-            print("⚠️ Max 2 ROIs reached.")
-            return
+        
         rid = self._allocate_id()
         if rid is None:
             return
@@ -99,7 +110,7 @@ class ROIManager:
 
     def select_roi(self, x, y, shift=False):
         """Select ROI for move or resize. Shift=True → resize."""
-        for rid in (2, 1):
+        for rid in sorted(self.rois.keys(), reverse=True):
             roi = self.rois.get(rid)
             if roi is None:
                 continue
