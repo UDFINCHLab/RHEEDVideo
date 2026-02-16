@@ -216,7 +216,7 @@ def main():
     show_plot = True
     frame_idx = 0
     t0 = time.time()
-    fullscreen_roi = None
+    
 
     # ML capture state only (process removed)
     ml_capture = False
@@ -238,7 +238,7 @@ def main():
     y_anim_1, y_anim_2 = {}, {}
     cv2.namedWindow("RHEED Dashboard", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("RHEED Dashboard", 1280, 960)
-    
+    cv2.namedWindow("RHEED ROI Monitor", cv2.WINDOW_NORMAL)
 
     # mouse callback
     def mouse_cb(event, x, y, flags, _param):
@@ -347,27 +347,6 @@ def main():
                 y += 35
 
 
-            # FULLSCREEN ROI VIEW
-            if fullscreen_roi is not None:
-                chart, _ = render_chart(
-                    roi.rois.get(fullscreen_roi),
-                    1280, 930, now,
-                    f"ROI {fullscreen_roi} - FULL VIEW",
-                    {}
-                )
-
-                cv2.imshow("RHEED Dashboard", chart)
-                key = cv2.waitKey(1) & 0xFF
-                window_stat=cv2.getWindowProperty("RHEED Dashboard", cv2.WND_PROP_VISIBLE)
-
-                if key == ord('d') or key == ord('D'):
-                    fullscreen_roi = None
-                elif key == ord('q') or key == ord('Q') or window_stat==0: #This breaks the main event loop on 'q' key or if user uses the 'exit' button in the GUI
-                    break
-
-                
-
-                continue
 
             mode_text = "FULL FEED" if not show_plot else "DASHBOARD"
             cv2.putText(disp, mode_text, (disp.shape[1] - 180, 40),
@@ -474,7 +453,7 @@ def main():
             # ----- ROI Monitor Popout -----
             extra_rois = sorted(roi.rois.keys())[2:]  # ROI 3+
             if len(extra_rois) > 0:
-                cv2.namedWindow("RHEED ROI Monitor", cv2.WINDOW_NORMAL)
+                
 
                 max_extra = 6
                 extra_rois = extra_rois[:max_extra]
@@ -570,11 +549,7 @@ def main():
             elif key == ord('t') or key==ord('T'):
                 roi.toggle_shape("rect")
 
-            # fullscreen ROI view
-            elif key == ord('1'):
-                fullscreen_roi = 1
-            elif key == ord('2'):
-                fullscreen_roi = 2
+            
 
                 # fullscreen ROI view
             elif key == ord('o') or key== ord('O'):
