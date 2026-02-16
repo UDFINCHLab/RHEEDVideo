@@ -238,7 +238,11 @@ def main():
     y_anim_1, y_anim_2 = {}, {}
     cv2.namedWindow("RHEED Dashboard", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("RHEED Dashboard", 1280, 960)
-    cv2.namedWindow("RHEED ROI Monitor", cv2.WINDOW_NORMAL)
+
+    roi_monitor_created = False
+
+
+  
 
     # mouse callback
     def mouse_cb(event, x, y, flags, _param):
@@ -451,9 +455,15 @@ def main():
             
             
             # ----- ROI Monitor Popout -----
-            extra_rois = sorted(roi.rois.keys())[2:]  # ROI 3+
+            extra_rois = sorted(roi.rois.keys())[2:]
+
             if len(extra_rois) > 0:
-                
+
+                if not roi_monitor_created:
+                    cv2.namedWindow("RHEED ROI Monitor", cv2.WINDOW_NORMAL)
+                    cv2.resizeWindow("RHEED ROI Monitor", 1200, 700)
+                    roi_monitor_created = True
+
 
                 max_extra = 6
                 extra_rois = extra_rois[:max_extra]
@@ -461,22 +471,11 @@ def main():
                 cols = 3
                 rows = 2
 
-                # Get current popup window size (so maximize/resize works)
-                try:
-                    _, _, pop_w, pop_h = cv2.getWindowImageRect("RHEED ROI Monitor")
-                except:
-                    pop_w, pop_h = 1200, 700
+                popup_w = 1200
+                popup_h = 700
 
-                # Avoid tiny sizes (prevents crashes / bad layout)
-                pop_w = max(pop_w, 600)
-                pop_h = max(pop_h, 400)
-
-                cell_w = pop_w // cols
-                cell_h = pop_h // rows
-
-                popup_w = cols * cell_w
-                popup_h = rows * cell_h
-
+                cell_w = popup_w // cols
+                cell_h = popup_h // rows
 
                 popup = np.zeros((popup_h, popup_w, 3), dtype=np.uint8)
 
@@ -487,7 +486,7 @@ def main():
                     chart, stats = render_chart(
                         roi.rois.get(rid),
                         cell_w,
-                        cell_h - 22,   # leave space for footer
+                        cell_h - 22,
                         now,
                         f"ROI {rid}",
                         {}
@@ -501,20 +500,22 @@ def main():
 
                     cell = np.vstack([chart, footer])
 
-
                     y0 = r * cell_h
                     x0 = c * cell_w
 
                     popup[y0:y0 + cell_h, x0:x0 + cell_w] = cell
 
-
-                cv2.imshow("RHEED ROI Monitor", popup)
-
-            else:
+                # Scale like main dashboard
                 try:
-                    cv2.destroyWindow("RHEED ROI Monitor")
+                    _, _, win_w, win_h = cv2.getWindowImageRect("RHEED ROI Monitor")
                 except:
-                    pass
+                    win_w, win_h = popup_w, popup_h
+
+                if win_w > 0 and win_h > 0:
+                    popup_display, _, _, _ = fit_to_window(popup, win_w, win_h)
+                    cv2.imshow("RHEED ROI Monitor", popup_display)
+
+
 
 
 
