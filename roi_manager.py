@@ -136,14 +136,17 @@ class ROIManager:
         if delta is not None:
             roi["rx"] = max(5, roi["rx"] + delta)
             roi["ry"] = max(5, roi["ry"] + delta)
-        elif self.resizing and self.start_point and x is not None:
+        elif self.resizing and self.start_point and x is not None and y is not None:
             cx, cy = roi["center"]
+
             if roi["shape"] == "ellipse":
-                r = int(np.hypot(x - cx, y - cy))
-                roi["rx"] = roi["ry"] = max(5, r)
+                roi["rx"] = max(5, abs(x - cx))
+                roi["ry"] = max(5, abs(y - cy))
+
             else:  # rectangle
                 roi["rx"] = max(5, abs(x - cx))
                 roi["ry"] = max(5, abs(y - cy))
+
 
     def release(self):
         self.moving = self.resizing = False

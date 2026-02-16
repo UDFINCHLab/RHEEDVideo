@@ -24,7 +24,28 @@ def fit_to_window(frame, screen_w, screen_h):
     y0 = (screen_h - new_h) // 2
     x0 = (screen_w - new_w) // 2
     result[y0:y0 + new_h, x0:x0 + new_w] = resized
-    return result
+
+    return result, scale, x0, y0
+
+
+def fit_preserve_aspect(frame, target_w, target_h):
+    fh, fw = frame.shape[:2]
+
+    scale = min(target_w / fw, target_h / fh)
+    new_w = int(fw * scale)
+    new_h = int(fh * scale)
+
+    resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+    canvas = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+
+    x_offset = (target_w - new_w) // 2
+    y_offset = (target_h - new_h) // 2
+
+    canvas[y_offset:y_offset + new_h, x_offset:x_offset + new_w] = resized
+
+    return canvas, scale, x_offset, y_offset
+
 
 
 # ---------------------- chart rendering ----------------------
@@ -204,6 +225,13 @@ def main():
     ml_frame_count = 0
     ml_toggle_request = False
     last_gray_shape = None
+    feed_scale = 1.0
+    feed_x_offset = 0
+    feed_y_offset = 0
+    global_scale = 1.0
+    global_x_offset = 0
+    global_y_offset = 0
+
 
     capture_button_rect = [0, 0, 0, 0]
 
@@ -214,7 +242,8 @@ def main():
 
     # mouse callback
     def mouse_cb(event, x, y, flags, _param):
-        nonlocal ml_toggle_request
+        nonlocal ml_toggle_request, feed_scale, feed_x_offset, feed_y_offset, global_scale, global_x_offset, global_y_offset
+
 
         if show_plot and event == cv2.EVENT_LBUTTONDOWN:
             x1, y1, x2, y2 = capture_button_rect
@@ -225,8 +254,30 @@ def main():
         if show_plot and x < panel_w:
             return
 
-        fx = x - (panel_w if show_plot else 0)
-        fy = y
+        # 1) Reverse global scaling: window -> combined-space
+        x_combined = (x - global_x_offset) / global_scale
+        y_combined = (y - global_y_offset) / global_scale
+
+        # Ignore clicks outside the combined image area (black padding)
+        if x_combined < 0 or y_combined < 0:
+            return
+
+        # 2) Ignore clicks inside the left plot panel
+        if show_plot and x_combined < panel_w:
+            return
+
+        # 3) Convert to feed-panel coordinates (right side of combined)
+        fx = x_combined - (panel_w if show_plot else 0)
+        fy = y_combined
+
+        # 4) Reverse feed aspect fit: feed-canvas -> original disp coords
+        fx = (fx - feed_x_offset) / feed_scale
+        fy = (fy - feed_y_offset) / feed_scale
+
+        fx = int(fx)
+        fy = int(fy)
+
+
         shift = bool(flags & cv2.EVENT_FLAG_SHIFTKEY)
 
 
@@ -345,12 +396,24 @@ def main():
                 left_block = None
 
             # footer bar
+            # footer bar
             feed_bar = np.zeros((24, disp.shape[1], 3), np.uint8)
             cv2.putText(feed_bar,
                         f"Pixel Int: {float(np.mean(gray)):.1f} | FPS: {np.round(cam.get_fps(), 2)} | Frame: {frame_idx}",
                         (10, 18), cv2.FONT_HERSHEY_SIMPLEX,
                         .85, (230, 230, 230), 2, cv2.LINE_AA)
-            right_block = np.vstack([disp, feed_bar])
+
+            # Determine available height for feed (excluding footer)
+            feed_height = disp.shape[0]
+            feed_width = disp.shape[1]
+
+            # Apply aspect-preserving scaling
+            disp_fitted, feed_scale, feed_x_offset, feed_y_offset = fit_preserve_aspect(
+                disp, feed_width, feed_height
+            )
+
+            right_block = np.vstack([disp_fitted, feed_bar])
+
 
             if show_plot:
                 total_h = max(left_block.shape[0], right_block.shape[0])
@@ -392,9 +455,18 @@ def main():
                 combined = right_block
                 capture_button_rect = [0, 0, 0, 0]
 
-            display = combined if show_plot else fit_to_window(combined, 1920, 1080)
+            # Get current window size
+            try:
+                _, _, win_w, win_h = cv2.getWindowImageRect("RHEED Dashboard")
+            except:
+                win_w, win_h = 1280, 960
+
+            # Render dashboard to match window exactly
+            display, global_scale, global_x_offset, global_y_offset = fit_to_window(combined, win_w, win_h)
+
 
             cv2.imshow("RHEED Dashboard", display)
+
             key = cv2.waitKey(1) & 0xFF
             window_status=cv2.getWindowProperty("RHEED Dashboard", cv2.WND_PROP_VISIBLE)
 
