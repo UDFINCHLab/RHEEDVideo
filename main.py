@@ -6,7 +6,7 @@ import time
 import datetime
 from camera import Camera
 from dummy_camera import DummyCamera
-from roi_manager import ROIManager
+from roi_manager import ROIManager, LineManager
 from config import VIDEO_OUTPUT_DIR
 from pathlib import Path
 
@@ -155,6 +155,8 @@ def apply_gradient(frame, lut="rheed_gradient_lut.npy", strength=0.8):
 def main():
     print("🚀 RHEED Dashboard (Enhanced Build)")
     roi = ROIManager()
+    line_manager = LineManager()
+
 
     # camera
     try:
@@ -283,8 +285,17 @@ def main():
 
 
         shift = bool(flags & cv2.EVENT_FLAG_SHIFTKEY)
+        
+        if line_manager.active:
+            if event == cv2.EVENT_LBUTTONDOWN:
+                line_manager.start_drawing(fx, fy)
+            elif event == cv2.EVENT_MOUSEMOVE:
+                line_manager.update_drawing(fx, fy)
+            elif event == cv2.EVENT_LBUTTONUP:
+                line_manager.finish_drawing()
+            return         
 
-
+           
         if event == cv2.EVENT_LBUTTONDOWN:
             if not roi.select_roi(fx, fy, shift=shift):
                 roi.start_drawing(fx, fy)
@@ -318,6 +329,9 @@ def main():
             gray = frame if frame.ndim == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             last_gray_shape = gray.shape[:2]
             roi.update_intensities(gray, now)
+            if line_manager.active:
+                line_manager.extract_profile(gray, now)
+
 
             # ML capture only (no ML process)
             if ml_capture and ml_writer is not None:
@@ -330,6 +344,8 @@ def main():
                 if gradient else cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
             roi.draw_overlays(disp)
+            line_manager.draw_overlay(disp)
+
 
                         # -------- Camera settings overlay --------
             hw = getattr(cam, "has_hw_control", False)
@@ -449,6 +465,9 @@ def main():
 
 
             cv2.imshow("RHEED Dashboard", display)
+            if line_manager.active:
+                line_manager.render_window()
+
 
             key = cv2.waitKey(1) & 0xFF
             window_status=cv2.getWindowProperty("RHEED Dashboard", cv2.WND_PROP_VISIBLE)
@@ -514,6 +533,9 @@ def main():
                 if win_w > 0 and win_h > 0:
                     popup_display, _, _, _ = fit_to_window(popup, win_w, win_h)
                     cv2.imshow("RHEED ROI Monitor", popup_display)
+                
+                
+
 
 
 
@@ -543,6 +565,11 @@ def main():
             # toggle full view
             elif key in (ord('f'), ord('F')):
                 show_plot = not show_plot
+            
+            # line toggle
+            elif key == ord('l') or key == ord('L'):
+                line_manager.toggle()
+    
 
             # shape toggles
             elif key == ord('e')or  key== ord('E'):
