@@ -570,26 +570,82 @@ def main():
             if hover_plot_info:
                 rid, tval, yval, mx, my = hover_plot_info
                 txt = f"ROI {rid} | t={tval:.2f}s | I={yval:.2f}"
+
+                (tw, th), _ = cv2.getTextSize(txt,
+                                            cv2.FONT_HERSHEY_SIMPLEX,
+                                            0.45, 1)
+
+                pad = 6
+                box_w = tw + pad * 2
+                box_h = th + pad * 2
+
+                # default position (right & above cursor)
+                bx = mx + 12
+                by = my - box_h - 8
+
+                H, W = display.shape[:2]
+
+                # clamp right edge
+                if bx + box_w > W:
+                    bx = W - box_w - 5
+
+                # clamp left edge
+                if bx < 0:
+                    bx = 5
+
+                # clamp top edge
+                if by < 0:
+                    by = my + 12
+
+                # clamp bottom edge
+                if by + box_h > H:
+                    by = H - box_h - 5
+
                 cv2.rectangle(display,
-                            (mx+10, my-25),
-                            (mx+260, my-5),
-                            (40,40,40), -1)
+                            (bx, by),
+                            (bx + box_w, by + box_h),
+                            (30, 30, 30), -1)
+
                 cv2.putText(display, txt,
-                            (mx+15, my-10),
+                            (bx + pad, by + box_h - pad),
                             cv2.FONT_HERSHEY_SIMPLEX,
-                            0.45, (255,255,255), 1, cv2.LINE_AA)
+                            0.45, (255, 255, 255), 1, cv2.LINE_AA)
 
             if hover_feed_info:
                 rid, sum_int, mx, my = hover_feed_info
                 txt = f"ROI {rid} SUM = {sum_int}"
+
+                (tw, th), _ = cv2.getTextSize(txt,
+                                            cv2.FONT_HERSHEY_SIMPLEX,
+                                            0.45, 1)
+
+                pad = 6
+                box_w = tw + pad * 2
+                box_h = th + pad * 2
+
+                bx = mx + 12
+                by = my - box_h - 8
+
+                H, W = display.shape[:2]
+
+                if bx + box_w > W:
+                    bx = W - box_w - 5
+                if bx < 0:
+                    bx = 5
+                if by < 0:
+                    by = my + 12
+                if by + box_h > H:
+                    by = H - box_h - 5
+
                 cv2.rectangle(display,
-                            (mx+10, my-25),
-                            (mx+220, my-5),
-                            (0,0,0), -1)
+                            (bx, by),
+                            (bx + box_w, by + box_h),
+                            (0, 0, 0), -1)
+
                 cv2.putText(display, txt,
-                            (mx+15, my-10),
+                            (bx + pad, by + box_h - pad),
                             cv2.FONT_HERSHEY_SIMPLEX,
-                            0.45, (0,255,255), 1, cv2.LINE_AA)
+                            0.45, (0, 255, 255), 1, cv2.LINE_AA)
 
 
             cv2.imshow("RHEED Dashboard", display)
@@ -715,12 +771,36 @@ def main():
                     if popup_hover_info:
                         rid, tval, yval, mxw, myw = popup_hover_info
                         txt = f"ROI {rid} | t={tval:.2f}s | I={yval:.2f}"
+
+                        (tw, th), _ = cv2.getTextSize(txt,
+                                                    cv2.FONT_HERSHEY_SIMPLEX,
+                                                    0.45, 1)
+
+                        pad = 6
+                        box_w = tw + pad * 2
+                        box_h = th + pad * 2
+
+                        bx = mxw + 12
+                        by = myw - box_h - 8
+
+                        H, W = popup_display.shape[:2]
+
+                        if bx + box_w > W:
+                            bx = W - box_w - 5
+                        if bx < 0:
+                            bx = 5
+                        if by < 0:
+                            by = myw + 12
+                        if by + box_h > H:
+                            by = H - box_h - 5
+
                         cv2.rectangle(popup_display,
-                                    (mxw+10, myw-25),
-                                    (mxw+260, myw-5),
+                                    (bx, by),
+                                    (bx + box_w, by + box_h),
                                     (30,30,30), -1)
+
                         cv2.putText(popup_display, txt,
-                                    (mxw+15, myw-10),
+                                    (bx + pad, by + box_h - pad),
                                     cv2.FONT_HERSHEY_SIMPLEX,
                                     0.45, (255,255,255), 1, cv2.LINE_AA)
 
