@@ -286,7 +286,7 @@ def main():
 
         shift = bool(flags & cv2.EVENT_FLAG_SHIFTKEY)
         
-        if line_manager.active:
+        if line_manager.draw_mode:
             if event == cv2.EVENT_LBUTTONDOWN:
                 line_manager.start_drawing(fx, fy)
             elif event == cv2.EVENT_MOUSEMOVE:
@@ -329,7 +329,7 @@ def main():
             gray = frame if frame.ndim == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             last_gray_shape = gray.shape[:2]
             roi.update_intensities(gray, now)
-            if line_manager.active:
+            if line_manager.pt1 and line_manager.pt2:
                 line_manager.extract_profile(gray, now)
 
 
@@ -465,7 +465,7 @@ def main():
 
 
             cv2.imshow("RHEED Dashboard", display)
-            if line_manager.active:
+            if line_manager.pt1 and line_manager.pt2:
                 line_manager.render_window()
 
 
@@ -569,6 +569,9 @@ def main():
             # line toggle
             elif key == ord('l') or key == ord('L'):
                 line_manager.toggle()
+            
+            elif key == ord('x') or key == ord('X'):
+                line_manager.clear_line()
     
 
             # shape toggles

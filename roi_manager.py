@@ -279,7 +279,7 @@ class ROIManager:
 
 class LineManager:
     def __init__(self):
-        self.active = False
+        self.draw_mode = False
         self.drawing = False
         self.pt1 = None
         self.pt2 = None
@@ -288,17 +288,19 @@ class LineManager:
         self._win_created = False
 
     def toggle(self):
-        self.active = not self.active
-        if not self.active:
-            self.pt1 = None
-            self.pt2 = None
-            self.profile = None
-            try:
-                cv2.destroyWindow("RHEED Line Profile")
-            except:
-                pass
-            self._win_created = False
-        print(f"📏 Line Mode → {'ON' if self.active else 'OFF'}")
+        self.draw_mode = not self.draw_mode
+        print(f"📏 Line Draw Mode → {'ON' if self.draw_mode else 'OFF'}")
+        
+    def clear_line(self):
+        self.pt1 = None
+        self.pt2 = None
+        self.profile = None
+        self.elapsed_s = 0.0
+        try:
+            cv2.destroyWindow("RHEED Line Profile")
+        except:
+            pass
+        print("🗑 Line Cleared")
 
     def start_drawing(self, x, y):
         self.drawing = True
