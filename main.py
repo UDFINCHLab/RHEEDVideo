@@ -219,6 +219,16 @@ def main():
     frame_idx = 0
     t0 = time.time()
     
+    # ---------------- Hover state ----------------
+    hover_plot_info = None
+    hover_feed_info = None
+    
+    mouse_x = 0
+    mouse_y = 0
+    
+    popup_mouse_x = 0
+    popup_mouse_y = 0
+    popup_hover_info = None
 
     # ML capture state only (process removed)
     ml_capture = False
@@ -248,7 +258,12 @@ def main():
 
     # mouse callback
     def mouse_cb(event, x, y, flags, _param):
-        nonlocal ml_toggle_request, feed_scale, feed_x_offset, feed_y_offset, global_scale, global_x_offset, global_y_offset
+        nonlocal ml_toggle_request, feed_scale, feed_x_offset, feed_y_offset
+        nonlocal global_scale, global_x_offset, global_y_offset
+        nonlocal mouse_x, mouse_y
+
+        mouse_x = x
+        mouse_y = y
 
 
         if show_plot and event == cv2.EVENT_LBUTTONDOWN:
@@ -269,9 +284,7 @@ def main():
             return
 
         # 2) Ignore clicks inside the left plot panel
-        if show_plot and x_combined < panel_w:
-            return
-
+        
         # 3) Convert to feed-panel coordinates (right side of combined)
         fx = x_combined - (panel_w if show_plot else 0)
         fy = y_combined
@@ -307,6 +320,7 @@ def main():
                 roi.move_selected(fx, fy)
             elif roi.resizing:
                 roi.resize_selected(x=fx, y=fy)
+                
 
         elif event == cv2.EVENT_LBUTTONUP:
             if roi.drawing:
@@ -317,6 +331,11 @@ def main():
             roi.remove_nearest(fx, fy)
 
     cv2.setMouseCallback("RHEED Dashboard", mouse_cb)
+    
+    def popup_mouse_cb(event, x, y, flags, _param):
+        nonlocal popup_mouse_x, popup_mouse_y
+        popup_mouse_x = x
+        popup_mouse_y = y
 
     try:
         while True:
@@ -462,6 +481,115 @@ def main():
 
             # Render dashboard to match window exactly
             display, global_scale, global_x_offset, global_y_offset = fit_to_window(combined, win_w, win_h)
+            
+            # ---------------- LIVE HOVER COMPUTATION ----------------
+
+            hover_plot_info = None
+            hover_feed_info = None
+
+            # Convert window mouse → combined coords
+            x_combined = (mouse_x - global_x_offset) / global_scale
+            y_combined = (mouse_y - global_y_offset) / global_scale
+
+            if show_plot and 0 <= x_combined < panel_w:
+
+                H = combined.shape[0]
+                top_h = H // 2
+                roi_id = 1 if y_combined < top_h else 2
+                roi_data = roi.rois.get(roi_id)
+
+                if roi_data and len(roi_data["t"]) > 1:
+
+                    chart_h = top_h if roi_id == 1 else H - top_h
+                    chart_y0 = 0 if roi_id == 1 else top_h
+
+                    ml, mr, mt, mb = 100, 20, 54, 44
+                    plot_w = panel_w - ml - mr
+                    plot_h = chart_h - mt - mb
+
+                    px = x_combined - ml
+                    py = y_combined - chart_y0 - mt
+
+                    if 0 <= px <= plot_w and 0 <= py <= plot_h:
+
+                        t_arr = np.array(roi_data["t"])
+                        y_arr = np.array(roi_data["y"])
+
+                        tx0, tx1 = t_arr[0], t_arr[-1]
+                        frac = px / plot_w
+                        target_time = tx0 + frac * (tx1 - tx0)
+
+                        idx = np.argmin(np.abs(t_arr - target_time))
+
+                        hover_plot_info = (
+                            roi_id,
+                            float(t_arr[idx]),
+                            float(y_arr[idx]),
+                            int(mouse_x),
+                            int(mouse_y)
+                        )
+
+            else:
+                # Hover inside feed
+                fx = x_combined - (panel_w if show_plot else 0)
+                fy = y_combined
+
+                fx = (fx - feed_x_offset) / feed_scale
+                fy = (fy - feed_y_offset) / feed_scale
+
+                fx = int(fx)
+                fy = int(fy)
+
+                for rid, r in roi.rois.items():
+                    cx, cy = r["center"]
+                    rx, ry = r["rx"], r["ry"]
+
+                    if r["shape"] == "ellipse":
+                        inside = ((fx - cx)**2)/(rx**2) + ((fy - cy)**2)/(ry**2) <= 1
+                    else:
+                        inside = (cx - rx <= fx <= cx + rx) and (cy - ry <= fy <= cy + ry)
+
+                    if inside:
+                        mask = np.zeros_like(gray, dtype=np.uint8)
+
+                        if r["shape"] == "ellipse":
+                            cv2.ellipse(mask, (cx, cy), (rx, ry), 0, 0, 360, 255, -1)
+                        else:
+                            cv2.rectangle(mask,
+                                        (cx - rx, cy - ry),
+                                        (cx + rx, cy + ry),
+                                        255, -1)
+
+                        sum_int = int(np.sum(gray[mask == 255]))
+
+                        hover_feed_info = (rid, sum_int, mouse_x, mouse_y)
+                        break
+                        
+            # ---------------- Hover Tooltips ----------------
+
+            if hover_plot_info:
+                rid, tval, yval, mx, my = hover_plot_info
+                txt = f"ROI {rid} | t={tval:.2f}s | I={yval:.2f}"
+                cv2.rectangle(display,
+                            (mx+10, my-25),
+                            (mx+260, my-5),
+                            (40,40,40), -1)
+                cv2.putText(display, txt,
+                            (mx+15, my-10),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.45, (255,255,255), 1, cv2.LINE_AA)
+
+            if hover_feed_info:
+                rid, sum_int, mx, my = hover_feed_info
+                txt = f"ROI {rid} SUM = {sum_int}"
+                cv2.rectangle(display,
+                            (mx+10, my-25),
+                            (mx+220, my-5),
+                            (0,0,0), -1)
+                cv2.putText(display, txt,
+                            (mx+15, my-10),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.45, (0,255,255), 1, cv2.LINE_AA)
 
 
             cv2.imshow("RHEED Dashboard", display)
@@ -481,8 +609,8 @@ def main():
                 if not roi_monitor_created:
                     cv2.namedWindow("RHEED ROI Monitor", cv2.WINDOW_NORMAL)
                     cv2.resizeWindow("RHEED ROI Monitor", 1200, 700)
+                    cv2.setMouseCallback("RHEED ROI Monitor", popup_mouse_cb)
                     roi_monitor_created = True
-
 
                 max_extra = 6
                 extra_rois = extra_rois[:max_extra]
@@ -524,18 +652,84 @@ def main():
 
                     popup[y0:y0 + cell_h, x0:x0 + cell_w] = cell
 
-                # Scale like main dashboard
                 try:
                     _, _, win_w, win_h = cv2.getWindowImageRect("RHEED ROI Monitor")
                 except:
                     win_w, win_h = popup_w, popup_h
 
                 if win_w > 0 and win_h > 0:
-                    popup_display, _, _, _ = fit_to_window(popup, win_w, win_h)
-                    cv2.imshow("RHEED ROI Monitor", popup_display)
-                
-                
 
+                    popup_display, popup_scale, popup_x_offset, popup_y_offset = \
+                        fit_to_window(popup, win_w, win_h)
+
+                    # -------- Popup Hover Computation --------
+                    popup_hover_info = None
+
+                    mx = (popup_mouse_x - popup_x_offset) / popup_scale
+                    my = (popup_mouse_y - popup_y_offset) / popup_scale
+
+                    if 0 <= mx < popup_w and 0 <= my < popup_h:
+
+                        col = int(mx // cell_w)
+                        row = int(my // cell_h)
+                        idx = row * 3 + col
+
+                        if idx < len(extra_rois):
+
+                            rid = extra_rois[idx]
+                            roi_data = roi.rois.get(rid)
+
+                            if roi_data and len(roi_data["t"]) > 1:
+
+                                chart_h = cell_h - 22
+                                chart_y0 = row * cell_h
+                                chart_x0 = col * cell_w
+
+                                ml, mr, mt, mb = 100, 20, 54, 44
+                                plot_w = cell_w - ml - mr
+                                plot_h = chart_h - mt - mb
+
+                                px = mx - chart_x0 - ml
+                                py = my - chart_y0 - mt
+
+                                if 0 <= px <= plot_w and 0 <= py <= plot_h:
+
+                                    t_arr = np.array(roi_data["t"])
+                                    y_arr = np.array(roi_data["y"])
+
+                                    tx0, tx1 = t_arr[0], t_arr[-1]
+                                    frac = px / plot_w
+                                    target_time = tx0 + frac * (tx1 - tx0)
+
+                                    idx2 = np.argmin(np.abs(t_arr - target_time))
+
+                                    popup_hover_info = (
+                                        rid,
+                                        float(t_arr[idx2]),
+                                        float(y_arr[idx2]),
+                                        popup_mouse_x,
+                                        popup_mouse_y
+                                    )
+
+                    # -------- Draw Tooltip --------
+                    if popup_hover_info:
+                        rid, tval, yval, mxw, myw = popup_hover_info
+                        txt = f"ROI {rid} | t={tval:.2f}s | I={yval:.2f}"
+                        cv2.rectangle(popup_display,
+                                    (mxw+10, myw-25),
+                                    (mxw+260, myw-5),
+                                    (30,30,30), -1)
+                        cv2.putText(popup_display, txt,
+                                    (mxw+15, myw-10),
+                                    cv2.FONT_HERSHEY_SIMPLEX,
+                                    0.45, (255,255,255), 1, cv2.LINE_AA)
+
+                    cv2.imshow("RHEED ROI Monitor", popup_display)
+
+            else:
+                if roi_monitor_created:
+                    cv2.destroyWindow("RHEED ROI Monitor")
+                    roi_monitor_created = False
 
 
 
