@@ -3,8 +3,9 @@ import numpy as np
 from collections import deque
 import pandas as pd
 import datetime
+import uuid
 from pathlib import Path
-from config import ROI_OUTPUT_DIR
+
 
 
 ROI_COLORS = {
@@ -32,8 +33,7 @@ class ROIManager:
         self.temp_roi = None
         self.roi_saves=0
         
-        self.roi_main_directory = ROI_OUTPUT_DIR
-        self.roi_main_directory.mkdir(parents=True, exist_ok=True)
+        
 
 
 
@@ -59,10 +59,11 @@ class ROIManager:
     def _new_roi(self, rid, center, rx, ry, shape=None):
         return {
             "id": rid,
+            "uuid": str(uuid.uuid4()),  # ← ADD THIS LINE
             "center": (int(center[0]), int(center[1])),
             "rx": int(max(5, rx)),
             "ry": int(max(5, ry)),
-            "shape": shape if shape else self.shape_mode,   # NEW
+            "shape": shape if shape else self.shape_mode,
             "color": ROI_COLORS[rid],
             "t": deque(maxlen=self.max_history),
             "y": deque(maxlen=self.max_history),
@@ -180,20 +181,21 @@ class ROIManager:
                 y2 = cy + roi["ry"]
                 cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
 
-            mean_int = cv2.mean(frame_gray, mask=mask)[0]
+            raw_mean = cv2.mean(frame_gray, mask=mask)[0]
 
-            #Temporary moving average method for the ROIS
-            moving_avg_window=15
-            moving_avg=mean_int
-            summands=list(roi["y"])[-moving_avg_window:]
-            summand_length=len(summands)+1
-            moving_avg+=np.sum(summands)
-            moving_avg/=(summand_length)
+            moving_avg_window = 15
+            summands = list(roi["y"])[-moving_avg_window:]
+            moving_avg = raw_mean
+            moving_avg += np.sum(summands)
+            moving_avg /= (len(summands) + 1)
 
-         
-            
             roi["t"].append(timestamp_s)
             roi["y"].append(moving_avg)
+
+            # NEW: store raw + sum + area for logging
+            roi["last_raw_mean"] = float(raw_mean)
+            roi["last_sum"] = float(np.sum(frame_gray[mask == 255]))
+            roi["last_area"] = int(np.sum(mask == 255))
 
     # ---------- overlay ----------
     def draw_overlays(self, frame_bgr):
@@ -229,49 +231,6 @@ class ROIManager:
                 cv2.rectangle(frame_bgr, (x1, y1), (x2, y2),
                               (200, 200, 255), 1, cv2.LINE_AA)
 
-# ------------------- ROI Save to CSV -------------------- #
-
-    def roi_2_csv(self):
-        
-        df=pd.DataFrame()
-
-        timestamp=datetime.datetime.now()
-       
-        for osc_curve in self.rois:
-            keys=self.rois[osc_curve].keys()
-            osc_curve_values={key : self.rois[osc_curve][key] for key in keys & {'t','y'} }
-            osc_curve_params={key : self.rois[osc_curve][key] for key in keys - {'t','y'}}
-            temp_df=pd.DataFrame.from_dict(osc_curve_values)
-            temp_df.insert(0, 'ROI Number', osc_curve)
-            df=pd.concat([df,temp_df])
-       
-
-        try:
-            final_output_path=self.roi_main_directory / f'{timestamp.strftime("%Y")}'/ f'{timestamp.strftime("%B")}'/f'{timestamp.strftime("%m%d%y")}'
-            print(f'\n⏳ Attempting to create output directory : \"{final_output_path}\" ...')
-            subdirectory_extension=final_output_path.mkdir(parents=True, exist_ok=False)
-            print('✅     ... successfully created!\n')
-        except FileExistsError:
-            print('⚠️     ... directory already exists.\n')
-
-        file_name=final_output_path/f'RHEED_ROI_data_{timestamp.strftime("%m-%d-%y_%H-%M-%S")}.txt'
-
-        if file_name.exists():
-            print(f'\n\n⚠️ File : \"{file_name}\" already exists.')
-            file_name=final_output_path/f'RHEED_ROI_data_{timestamp.strftime("%m-%d-%y_%H-%M-%S Newer")}.txt'
-            print(f'\n✅ Creating file with file name: \"{file_name}\" instead.\n')
-        
-
-        with open(file_name, 'w') as output:
-            output.write('--- RHEED ROI Data ---\n\n')
-            output.write(f'Timestamp: {timestamp}\n')
-
-            output.write(f'\n---DATA START---\n')
-
-        df.to_csv(file_name, mode='a', header=True)
-
-        print(f'\n✅ 📈 RHEED ROI Saved to \"{file_name}\" at {timestamp}!\n')      
-        
 
 # ============================================================
 # ------------------- Line Profile Manager -------------------

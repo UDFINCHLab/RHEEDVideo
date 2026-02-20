@@ -7,7 +7,7 @@ import datetime
 from camera import Camera
 from dummy_camera import DummyCamera
 from roi_manager import ROIManager, LineManager
-from config import VIDEO_OUTPUT_DIR
+from config import VIDEO_OUTPUT_DIR, ROI_OUTPUT_DIR
 from pathlib import Path
 
 
@@ -16,13 +16,27 @@ from pathlib import Path
 # ---------------------- aspect ratio helper ----------------------
 def fit_to_window(frame, screen_w, screen_h):
     h, w = frame.shape[:2]
+
+    # ---- Guard against invalid window sizes ----
+    if screen_w <= 1 or screen_h <= 1 or w <= 0 or h <= 0:
+        return frame, 1.0, 0, 0
+
+    # Compute scale
     scale = min(screen_w / w, screen_h / h)
-    new_w, new_h = int(w * scale), int(h * scale)
+
+    # Ensure positive dimensions
+    new_w = max(1, int(w * scale))
+    new_h = max(1, int(h * scale))
+
+    # Resize safely
     resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
+    # Create padded canvas
     result = np.zeros((screen_h, screen_w, 3), dtype=np.uint8)
+
     y0 = (screen_h - new_h) // 2
     x0 = (screen_w - new_w) // 2
+
     result[y0:y0 + new_h, x0:x0 + new_w] = resized
 
     return result, scale, x0, y0
@@ -217,8 +231,34 @@ def main():
     strength = 0.7
     show_plot = True
     frame_idx = 0
+    total_logged_rows = 0
     t0 = time.time()
     
+    # ---------------------- ROI CSV Logging Setup ----------------------
+    session_timestamp = datetime.datetime.now()
+
+    csv_dir = (
+        ROI_OUTPUT_DIR
+        / f"{session_timestamp.strftime('%Y')}"
+        / f"{session_timestamp.strftime('%B')}"
+        / f"{session_timestamp.strftime('%m%d%y')}"
+    )
+
+    csv_dir.mkdir(parents=True, exist_ok=True)
+
+    csv_filename = csv_dir / f"RHEED_ROI_{session_timestamp.strftime('%m-%d-%y_%H-%M-%S')}.csv"
+
+    log_buffer = []
+    last_flush_time = time.time()
+    flush_interval = 1.0  # seconds
+
+    # Write CSV header once
+    with open(csv_filename, "w") as f:
+        f.write(
+            "frame_idx,timestamp_s,roi_uuid,roi_display_id,"
+            "mean_intensity,sum_intensity,area,cx,cy,rx,ry,shape\n"
+        )
+        
     # ---------------- Hover state ----------------
     hover_plot_info = None
     hover_feed_info = None
@@ -348,6 +388,27 @@ def main():
             gray = frame if frame.ndim == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             last_gray_shape = gray.shape[:2]
             roi.update_intensities(gray, now)
+            
+            # ---------------------- Append ROI Data To Buffer ----------------------
+            # ---------------------- Append ROI Data To Buffer ----------------------
+            for rid, r in roi.rois.items():
+
+                if len(r["t"]) == 0:
+                    continue
+
+                mean_int = r.get("last_raw_mean", 0.0)
+                sum_int = r.get("last_sum", 0.0)
+                area = r.get("last_area", 0)
+
+                cx, cy = r["center"]
+                rx, ry = r["rx"], r["ry"]
+                shape = r["shape"]
+
+                log_buffer.append(
+                    f"{frame_idx},{now:.6f},{r.get('uuid','NA')},{rid},"
+                    f"{mean_int:.6f},{sum_int},{area},{cx},{cy},{rx},{ry},{shape}\n"
+                )
+                total_logged_rows += 1
             if line_manager.pt1 and line_manager.pt2:
                 line_manager.extract_profile(gray, now)
 
@@ -649,6 +710,16 @@ def main():
 
 
             cv2.imshow("RHEED Dashboard", display)
+            
+            # ---------------------- Periodic CSV Flush ----------------------
+            if time.time() - last_flush_time > flush_interval and log_buffer:
+
+                with open(csv_filename, "a") as f:
+                    f.writelines(log_buffer)
+
+                log_buffer.clear()
+                last_flush_time = time.time()
+                
             if line_manager.pt1 and line_manager.pt2:
                 line_manager.render_window()
 
@@ -832,6 +903,12 @@ def main():
 
             # reset ROIs
             elif key == ord('r'):
+
+                if log_buffer:
+                    with open(csv_filename, "a") as f:
+                        f.writelines(log_buffer)
+                    log_buffer.clear()
+
                 roi.reset()
                 y_anim_1.clear()
                 y_anim_2.clear()
@@ -854,11 +931,7 @@ def main():
             elif key == ord('t') or key==ord('T'):
                 roi.toggle_shape("rect")
 
-            
-
-                # fullscreen ROI view
-            elif key == ord('o') or key== ord('O'):
-                roi.roi_2_csv()
+        
             
 
             # capture toggle
@@ -958,12 +1031,21 @@ def main():
         if ml_writer is not None:
             ml_writer.release()
             print(f"📤 ML capture STOPPED on exit. Saved {ml_frame_count} frames → {ml_filename}")
+            
+        # ---------------------- Final CSV Flush ----------------------
+        total_rows_written = 0
 
-        cam.stop()
-        cv2.destroyAllWindows()
-        print("✅ Cleanup complete.")
+        if log_buffer:
+            with open(csv_filename, "a") as f:
+                f.writelines(log_buffer)
+            total_rows_written = len(log_buffer)
+            log_buffer.clear()
 
-       
+        print("\n📁 ROI logging session closed.")
+        print(f"   ➤ File: {csv_filename.resolve()}")
+        print(f"   ➤ Total rows written (entire session): {total_logged_rows}")
+
+            
 
         
 
