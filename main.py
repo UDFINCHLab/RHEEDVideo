@@ -4,6 +4,9 @@ import cv2
 import numpy as np
 import time
 import datetime
+import threading
+from threading import Lock
+from collections import deque
 from camera import Camera
 from dummy_camera import DummyCamera
 from roi_manager import ROIManager, LineManager
@@ -170,6 +173,19 @@ def main():
     print("🚀 RHEED Dashboard (Enhanced Build)")
     roi = ROIManager()
     line_manager = LineManager()
+    
+        # ---------------- Threaded runtime state ----------------
+    running = True
+
+    roi_lock = Lock()      # protects roi + line_manager mutations
+    frame_lock = Lock()    # protects latest frame buffers
+    log_lock = Lock()
+
+    latest_gray = None
+    latest_disp = None
+    latest_now = 0.0
+    latest_frame_idx = 0
+    panel_w = 0
 
 
     # camera
@@ -249,7 +265,7 @@ def main():
     csv_filename = csv_dir / f"RHEED_ROI_{session_timestamp.strftime('%m-%d-%y_%H-%M-%S')}.csv"
 
     log_buffer = []
-    last_flush_time = time.time()
+    last_flush_time = [time.time()]
     flush_interval = 1.0  # seconds
 
     # Write CSV header once
@@ -292,6 +308,7 @@ def main():
     cv2.resizeWindow("RHEED Dashboard", 1280, 960)
 
     roi_monitor_created = False
+    panel_w = 0
 
 
   
@@ -348,27 +365,28 @@ def main():
                 line_manager.finish_drawing()
             return         
 
-           
-        if event == cv2.EVENT_LBUTTONDOWN:
-            if not roi.select_roi(fx, fy, shift=shift):
-                roi.start_drawing(fx, fy)
+        with roi_lock:
+        # existing ROI code      
+            if event == cv2.EVENT_LBUTTONDOWN:
+                if not roi.select_roi(fx, fy, shift=shift):
+                    roi.start_drawing(fx, fy)
 
-        elif event == cv2.EVENT_MOUSEMOVE:
-            if roi.drawing:
-                roi.update_drawing(fx, fy)
-            elif roi.moving:
-                roi.move_selected(fx, fy)
-            elif roi.resizing:
-                roi.resize_selected(x=fx, y=fy)
-                
+            elif event == cv2.EVENT_MOUSEMOVE:
+                if roi.drawing:
+                    roi.update_drawing(fx, fy)
+                elif roi.moving:
+                    roi.move_selected(fx, fy)
+                elif roi.resizing:
+                    roi.resize_selected(x=fx, y=fy)
+                    
 
-        elif event == cv2.EVENT_LBUTTONUP:
-            if roi.drawing:
-                roi.finish_drawing()
-            roi.release()
+            elif event == cv2.EVENT_LBUTTONUP:
+                if roi.drawing:
+                    roi.finish_drawing()
+                roi.release()
 
-        elif event == cv2.EVENT_RBUTTONDOWN:
-            roi.remove_nearest(fx, fy)
+            elif event == cv2.EVENT_RBUTTONDOWN:
+                roi.remove_nearest(fx, fy)
 
     cv2.setMouseCallback("RHEED Dashboard", mouse_cb)
     
@@ -376,55 +394,92 @@ def main():
         nonlocal popup_mouse_x, popup_mouse_y
         popup_mouse_x = x
         popup_mouse_y = y
+        
+        
+        # ---------------- WORKER THREAD ----------------
+    def worker_loop():
+        nonlocal frame_idx, total_logged_rows
+        nonlocal latest_gray, latest_disp, latest_now, latest_frame_idx
+        nonlocal ml_capture, ml_writer, ml_frame_count
+        nonlocal last_gray_shape
 
-    try:
-        while True:
+        while running:
             frame = cam.get_frame()
             if frame is None:
                 continue
 
             now = time.time() - t0
-            frame_idx += 1
+
             gray = frame if frame.ndim == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             last_gray_shape = gray.shape[:2]
-            roi.update_intensities(gray, now)
-            
-            # ---------------------- Append ROI Data To Buffer ----------------------
-            # ---------------------- Append ROI Data To Buffer ----------------------
-            for rid, r in roi.rois.items():
 
-                if len(r["t"]) == 0:
-                    continue
+            with roi_lock:
+                roi.update_intensities(gray, now)
 
-                mean_int = r.get("last_raw_mean", 0.0)
-                sum_int = r.get("last_sum", 0.0)
-                area = r.get("last_area", 0)
+                for rid, r in roi.rois.items():
+                    if len(r["t"]) == 0:
+                        continue
 
-                cx, cy = r["center"]
-                rx, ry = r["rx"], r["ry"]
-                shape = r["shape"]
+                    mean_int = r.get("last_raw_mean", 0.0)
+                    sum_int = r.get("last_sum", 0.0)
+                    area = r.get("last_area", 0)
 
-                log_buffer.append(
-                    f"{frame_idx},{now:.6f},{r.get('uuid','NA')},{rid},"
-                    f"{mean_int:.6f},{sum_int},{area},{cx},{cy},{rx},{ry},{shape}\n"
-                )
-                total_logged_rows += 1
-            if line_manager.pt1 and line_manager.pt2:
-                line_manager.extract_profile(gray, now)
+                    cx, cy = r["center"]
+                    rx, ry = r["rx"], r["ry"]
+                    shape = r["shape"]
 
+                    log_buffer.append(
+                        f"{frame_idx+1},{now:.6f},{r.get('uuid','NA')},{rid},"
+                        f"{mean_int:.6f},{sum_int},{area},{cx},{cy},{rx},{ry},{shape}\n"
+                    )
+                    total_logged_rows += 1
 
-            # ML capture only (no ML process)
-            if ml_capture and ml_writer is not None:
-                colored_frame = apply_gradient(gray, strength=strength)
-                ml_writer.write(colored_frame)
-                ml_frame_count += 1
-
+                if line_manager.pt1 and line_manager.pt2:
+                    line_manager.extract_profile(gray, now)
 
             disp = apply_gradient(gray, strength=strength) \
                 if gradient else cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
-            roi.draw_overlays(disp)
-            line_manager.draw_overlay(disp)
+            with roi_lock:
+                roi.draw_overlays(disp)
+                line_manager.draw_overlay(disp)
+
+            if ml_capture and ml_writer is not None:
+                colored = apply_gradient(gray, strength=strength)
+                ml_writer.write(colored)
+                ml_frame_count += 1
+
+            with frame_lock:
+                frame_idx += 1
+                latest_gray = gray
+                latest_disp = disp
+                latest_now = now
+                latest_frame_idx = frame_idx
+
+            if time.time() - last_flush_time[0] > flush_interval:
+                with log_lock:
+                    if log_buffer:
+                        with open(csv_filename, "a") as f:
+                            f.writelines(log_buffer)
+                        log_buffer.clear()
+                        last_flush_time[0] = time.time()
+                
+    worker = threading.Thread(target=worker_loop, daemon=True)
+    worker.start()
+    print("Frame grabbed")
+    
+    try:
+        while True:
+            with frame_lock:
+                if latest_disp is None or latest_gray is None:
+                    continue
+
+                disp = latest_disp.copy()
+                gray = latest_gray
+                now = latest_now
+                frame_idx = latest_frame_idx
+            
+        
 
 
                         # -------- Camera settings overlay --------
@@ -456,8 +511,12 @@ def main():
                 H = disp.shape[0]
                 top_h, bot_h = H // 2, H - H // 2
                 panel_w=disp.shape[1] // 2 #Used to change the ROI plot width on the main window
-                chart1, stats1 = render_chart(roi.rois.get(1), panel_w, top_h, now, "ROI 1", y_anim_1)
-                chart2, stats2 = render_chart(roi.rois.get(2), panel_w, bot_h, now, "ROI 2", y_anim_2)
+                with roi_lock:
+                    roi1 = roi.rois.get(1)
+                    roi2 = roi.rois.get(2)
+
+                chart1, stats1 = render_chart(roi1, panel_w, top_h, now, "ROI 1", y_anim_1)
+                chart2, stats2 = render_chart(roi2, panel_w, bot_h, now, "ROI 2", y_anim_2)
 
                 def make_footer(stats):
                     bar = np.full((22, panel_w, 3), 235, np.uint8)
@@ -557,7 +616,8 @@ def main():
                 H = combined.shape[0]
                 top_h = H // 2
                 roi_id = 1 if y_combined < top_h else 2
-                roi_data = roi.rois.get(roi_id)
+                with roi_lock:
+                    roi_data = roi.rois.get(roi_id)
 
                 if roi_data and len(roi_data["t"]) > 1:
 
@@ -711,17 +771,10 @@ def main():
 
             cv2.imshow("RHEED Dashboard", display)
             
-            # ---------------------- Periodic CSV Flush ----------------------
-            if time.time() - last_flush_time > flush_interval and log_buffer:
-
-                with open(csv_filename, "a") as f:
-                    f.writelines(log_buffer)
-
-                log_buffer.clear()
-                last_flush_time = time.time()
-                
-            if line_manager.pt1 and line_manager.pt2:
-                line_manager.render_window()
+            
+            with roi_lock:    
+                if line_manager.pt1 and line_manager.pt2:
+                    line_manager.render_window()
 
 
             key = cv2.waitKey(1) & 0xFF
@@ -729,7 +782,8 @@ def main():
             
             
             # ----- ROI Monitor Popout -----
-            extra_rois = sorted(roi.rois.keys())[2:]
+            with roi_lock:
+                extra_rois = sorted(roi.rois.keys())[2:]
 
             if len(extra_rois) > 0:
 
@@ -804,39 +858,41 @@ def main():
                         if idx < len(extra_rois):
 
                             rid = extra_rois[idx]
-                            roi_data = roi.rois.get(rid)
 
-                            if roi_data and len(roi_data["t"]) > 1:
+                            with roi_lock:
+                                roi_data = roi.rois.get(rid)
 
-                                chart_h = cell_h - 22
-                                chart_y0 = row * cell_h
-                                chart_x0 = col * cell_w
+                                if roi_data and len(roi_data["t"]) > 1:
 
-                                ml, mr, mt, mb = 100, 20, 54, 44
-                                plot_w = cell_w - ml - mr
-                                plot_h = chart_h - mt - mb
+                                    chart_h = cell_h - 22
+                                    chart_y0 = row * cell_h
+                                    chart_x0 = col * cell_w
 
-                                px = mx - chart_x0 - ml
-                                py = my - chart_y0 - mt
+                                    ml, mr, mt, mb = 100, 20, 54, 44
+                                    plot_w = cell_w - ml - mr
+                                    plot_h = chart_h - mt - mb
 
-                                if 0 <= px <= plot_w and 0 <= py <= plot_h:
+                                    px = mx - chart_x0 - ml
+                                    py = my - chart_y0 - mt
 
-                                    t_arr = np.array(roi_data["t"])
-                                    y_arr = np.array(roi_data["y"])
+                                    if 0 <= px <= plot_w and 0 <= py <= plot_h:
 
-                                    tx0, tx1 = t_arr[0], t_arr[-1]
-                                    frac = px / plot_w
-                                    target_time = tx0 + frac * (tx1 - tx0)
+                                        t_arr = np.array(roi_data["t"])
+                                        y_arr = np.array(roi_data["y"])
 
-                                    idx2 = np.argmin(np.abs(t_arr - target_time))
+                                        tx0, tx1 = t_arr[0], t_arr[-1]
+                                        frac = px / plot_w
+                                        target_time = tx0 + frac * (tx1 - tx0)
 
-                                    popup_hover_info = (
-                                        rid,
-                                        float(t_arr[idx2]),
-                                        float(y_arr[idx2]),
-                                        popup_mouse_x,
-                                        popup_mouse_y
-                                    )
+                                        idx2 = np.argmin(np.abs(t_arr - target_time))
+
+                                        popup_hover_info = (
+                                            rid,
+                                            float(t_arr[idx2]),
+                                            float(y_arr[idx2]),
+                                            popup_mouse_x,
+                                            popup_mouse_y
+                                        )
 
                     # -------- Draw Tooltip --------
                     if popup_hover_info:
@@ -903,11 +959,11 @@ def main():
 
             # reset ROIs
             elif key == ord('r'):
-
-                if log_buffer:
-                    with open(csv_filename, "a") as f:
-                        f.writelines(log_buffer)
-                    log_buffer.clear()
+                with log_lock:
+                    if log_buffer:
+                        with open(csv_filename, "a") as f:
+                            f.writelines(log_buffer)
+                        log_buffer.clear()
 
                 roi.reset()
                 y_anim_1.clear()
@@ -1008,7 +1064,9 @@ def main():
 
                         h, w = last_gray_shape
                         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-                        ml_writer = cv2.VideoWriter(str(ml_filename), fourcc, 30.0, (w, h), True)
+                        actual_fps = 30.0  # FIXED FPS
+
+                        ml_writer = cv2.VideoWriter(str(ml_filename), fourcc, actual_fps, (w, h), True)
 
                         if not ml_writer.isOpened():
                             print("❌ Failed to open VideoWriter for ML capture.")
@@ -1028,22 +1086,28 @@ def main():
                     ml_frame_count = 0
 
     finally:
+        running = False
+        try:
+            worker.join(timeout=2.0)
+        except:
+            pass
+        
         if ml_writer is not None:
             ml_writer.release()
             print(f"📤 ML capture STOPPED on exit. Saved {ml_frame_count} frames → {ml_filename}")
             
         # ---------------------- Final CSV Flush ----------------------
         total_rows_written = 0
+        with log_lock:
+            if log_buffer:
+                with open(csv_filename, "a") as f:
+                    f.writelines(log_buffer)
+                total_rows_written = len(log_buffer)
+                log_buffer.clear()
 
-        if log_buffer:
-            with open(csv_filename, "a") as f:
-                f.writelines(log_buffer)
-            total_rows_written = len(log_buffer)
-            log_buffer.clear()
-
-        print("\n📁 ROI logging session closed.")
-        print(f"   ➤ File: {csv_filename.resolve()}")
-        print(f"   ➤ Total rows written (entire session): {total_logged_rows}")
+            print("\n📁 ROI logging session closed.")
+            print(f"   ➤ File: {csv_filename.resolve()}")
+            print(f"   ➤ Total rows written (entire session): {total_logged_rows}")
 
             
 
