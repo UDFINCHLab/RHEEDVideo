@@ -13,10 +13,9 @@ ROI_COLORS = {
     2: (0, 165, 255),     # Orange
     3: (0, 255, 0),       # Green
     4: (255, 0, 255),     # Magenta
-    5: (0, 255, 255),     # Yellow
+    5: (128, 0, 255),     # Purple
     6: (255, 255, 0),     # Cyan
-    7: (128, 0, 255),     # Purple
-    8: (0, 128, 255),     # Light Orange
+    
 }
 
 
@@ -48,10 +47,10 @@ class ROIManager:
 
     # ---------- helpers ----------
     def _allocate_id(self):
-        for rid in range(1, 9):   # Allow only 1–8
+        for rid in range(1, 7):   # Allow only 1–6
             if rid not in self.rois:
                 return rid
-        print("⚠️ Max 8 ROIs reached.")
+        print("⚠️ Max 6 ROIs reached.")
         return None
 
 

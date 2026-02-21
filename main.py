@@ -6,7 +6,6 @@ import time
 import datetime
 import threading
 from threading import Lock
-from collections import deque
 from camera import Camera
 from dummy_camera import DummyCamera
 from roi_manager import ROIManager, LineManager
@@ -155,7 +154,10 @@ def apply_gradient(frame, lut="rheed_gradient_lut.npy", strength=0.8):
     gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
 
     if not hasattr(apply_gradient, "lut"):
-        arr = np.load(lut)
+        try:
+            arr = np.load(lut)
+        except Exception:
+            return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
         x = np.linspace(0, 255, len(arr))
         full = np.zeros((256, 1, 3), np.uint8)
         for c in range(3):
@@ -174,7 +176,7 @@ def main():
     roi = ROIManager()
     line_manager = LineManager()
     
-        # ---------------- Threaded runtime state ----------------
+    # ---------------- Threaded runtime state ----------------
     running = True
 
     roi_lock = Lock()      # protects roi + line_manager mutations
@@ -185,7 +187,6 @@ def main():
     latest_disp = None
     latest_now = 0.0
     latest_frame_idx = 0
-    panel_w = 0
 
 
     # camera
@@ -245,7 +246,6 @@ def main():
 
     gradient = True
     strength = 0.7
-    show_plot = True
     frame_idx = 0
     total_logged_rows = 0
     t0 = time.time()
@@ -276,7 +276,6 @@ def main():
         )
         
     # ---------------- Hover state ----------------
-    hover_plot_info = None
     hover_feed_info = None
     
     mouse_x = 0
@@ -301,14 +300,11 @@ def main():
     global_y_offset = 0
 
 
-    capture_button_rect = [0, 0, 0, 0]
 
-    y_anim_1, y_anim_2 = {}, {}
     cv2.namedWindow("RHEED Dashboard", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("RHEED Dashboard", 1280, 960)
 
     roi_monitor_created = False
-    panel_w = 0
 
 
   
@@ -323,14 +319,6 @@ def main():
         mouse_y = y
 
 
-        if show_plot and event == cv2.EVENT_LBUTTONDOWN:
-            x1, y1, x2, y2 = capture_button_rect
-            if x1 < x < x2 and y1 < y < y2:
-                ml_toggle_request = True
-                return
-
-        if show_plot and x < panel_w:
-            return
 
         # 1) Reverse global scaling: window -> combined-space
         x_combined = (x - global_x_offset) / global_scale
@@ -343,7 +331,7 @@ def main():
         # 2) Ignore clicks inside the left plot panel
         
         # 3) Convert to feed-panel coordinates (right side of combined)
-        fx = x_combined - (panel_w if show_plot else 0)
+        fx = x_combined
         fy = y_combined
 
         # 4) Reverse feed aspect fit: feed-canvas -> original disp coords
@@ -366,7 +354,7 @@ def main():
             return         
 
         with roi_lock:
-        # existing ROI code      
+            # existing ROI code      
             if event == cv2.EVENT_LBUTTONDOWN:
                 if not roi.select_roi(fx, fy, shift=shift):
                     roi.start_drawing(fx, fy)
@@ -472,6 +460,7 @@ def main():
         while True:
             with frame_lock:
                 if latest_disp is None or latest_gray is None:
+                    time.sleep(0.005)
                     continue
 
                 disp = latest_disp.copy()
@@ -503,35 +492,11 @@ def main():
 
 
 
-            mode_text = "FULL FEED" if not show_plot else "DASHBOARD"
+            mode_text = "LIVE FEED"
             cv2.putText(disp, mode_text, (disp.shape[1] - 180, 40),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (220, 220, 220), 2, cv2.LINE_AA)
 
-            if show_plot:
-                H = disp.shape[0]
-                top_h, bot_h = H // 2, H - H // 2
-                panel_w=disp.shape[1] // 2 #Used to change the ROI plot width on the main window
-                with roi_lock:
-                    roi1 = roi.rois.get(1)
-                    roi2 = roi.rois.get(2)
-
-                chart1, stats1 = render_chart(roi1, panel_w, top_h, now, "ROI 1", y_anim_1)
-                chart2, stats2 = render_chart(roi2, panel_w, bot_h, now, "ROI 2", y_anim_2)
-
-                def make_footer(stats):
-                    bar = np.full((22, panel_w, 3), 235, np.uint8)
-                    text = f"Data Pt:{stats[0]:>4} | Elapsed:{stats[1]:>6.1f}s | Min:{stats[2]:>6.1f} | Max:{stats[3]:>6.1f}"
-                    cv2.putText(bar, text, (6, 15),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.48, (60, 60, 60), 1, cv2.LINE_AA)
-                    return bar
-
-                left_block = np.vstack([
-                    chart1, make_footer(stats1),
-                    chart2, make_footer(stats2)
-                ])
-
-            else:
-                left_block = None
+            
 
             # footer bar
             # footer bar
@@ -553,45 +518,8 @@ def main():
             right_block = np.vstack([disp_fitted, feed_bar])
 
 
-            if show_plot:
-                total_h = max(left_block.shape[0], right_block.shape[0])
-
-                if left_block.shape[0] < total_h:
-                    left_block = np.vstack([
-                        left_block,
-                        np.full((total_h - left_block.shape[0], panel_w, 3), 255, np.uint8)
-                    ])
-
-                if right_block.shape[0] < total_h:
-                    right_block = np.vstack([
-                        right_block,
-                        np.zeros((total_h - right_block.shape[0], right_block.shape[1], 3), np.uint8)
-                    ])
-
-                combined = np.hstack([left_block, right_block])
-
-                # ML CAPTURE button (still used for recording only)
-                btn_w, btn_h = 140, 26
-                dashboard_x = disp.shape[1] - 180
-                dashboard_y = 30
-
-                bx0 = panel_w + dashboard_x - btn_w - 20
-                by0 = dashboard_y - 12
-                bx1 = bx0 + btn_w
-                by1 = by0 + btn_h
-
-                capture_button_rect = [bx0, by0, bx1, by1]
-
-                btn_color = (0, 160, 0) if not ml_capture else (0, 0, 200)
-                label = "ML CAPTURE" if not ml_capture else "STOP CAPTURE"
-
-                cv2.rectangle(combined, (bx0, by0), (bx1, by1), btn_color, -1)
-                cv2.putText(combined, label, (bx0 + 6, by0 + 18),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 1, cv2.LINE_AA)
-
-            else:
-                combined = right_block
-                capture_button_rect = [0, 0, 0, 0]
+            combined = right_block
+            
 
             # Get current window size
             try:
@@ -604,134 +532,50 @@ def main():
             
             # ---------------- LIVE HOVER COMPUTATION ----------------
 
-            hover_plot_info = None
             hover_feed_info = None
 
-            # Convert window mouse → combined coords
             x_combined = (mouse_x - global_x_offset) / global_scale
             y_combined = (mouse_y - global_y_offset) / global_scale
 
-            if show_plot and 0 <= x_combined < panel_w:
+            fx = (x_combined - feed_x_offset) / feed_scale
+            fy = (y_combined - feed_y_offset) / feed_scale
 
-                H = combined.shape[0]
-                top_h = H // 2
-                roi_id = 1 if y_combined < top_h else 2
-                with roi_lock:
-                    roi_data = roi.rois.get(roi_id)
+            fx = int(fx)
+            fy = int(fy)
 
-                if roi_data and len(roi_data["t"]) > 1:
+            with roi_lock:
+                roi_items = list(roi.rois.items())
 
-                    chart_h = top_h if roi_id == 1 else H - top_h
-                    chart_y0 = 0 if roi_id == 1 else top_h
+            for rid, r in roi_items:
+                cx, cy = r["center"]
+                rx, ry = r["rx"], r["ry"]
 
-                    ml, mr, mt, mb = 100, 20, 54, 44
-                    plot_w = panel_w - ml - mr
-                    plot_h = chart_h - mt - mb
+                inside = False
 
-                    px = x_combined - ml
-                    py = y_combined - chart_y0 - mt
+                if r["shape"] == "ellipse":
+                    if rx > 0 and ry > 0:
+                        inside = ((fx - cx) ** 2) / (rx ** 2) + ((fy - cy) ** 2) / (ry ** 2) <= 1
+                else:
+                    inside = (cx - rx <= fx <= cx + rx) and (cy - ry <= fy <= cy + ry)
 
-                    if 0 <= px <= plot_w and 0 <= py <= plot_h:
-
-                        t_arr = np.array(roi_data["t"])
-                        y_arr = np.array(roi_data["y"])
-
-                        tx0, tx1 = t_arr[0], t_arr[-1]
-                        frac = px / plot_w
-                        target_time = tx0 + frac * (tx1 - tx0)
-
-                        idx = np.argmin(np.abs(t_arr - target_time))
-
-                        hover_plot_info = (
-                            roi_id,
-                            float(t_arr[idx]),
-                            float(y_arr[idx]),
-                            int(mouse_x),
-                            int(mouse_y)
-                        )
-
-            else:
-                # Hover inside feed
-                fx = x_combined - (panel_w if show_plot else 0)
-                fy = y_combined
-
-                fx = (fx - feed_x_offset) / feed_scale
-                fy = (fy - feed_y_offset) / feed_scale
-
-                fx = int(fx)
-                fy = int(fy)
-
-                for rid, r in roi.rois.items():
-                    cx, cy = r["center"]
-                    rx, ry = r["rx"], r["ry"]
+                if inside:
+                    mask = np.zeros_like(gray, dtype=np.uint8)
 
                     if r["shape"] == "ellipse":
-                        inside = ((fx - cx)**2)/(rx**2) + ((fy - cy)**2)/(ry**2) <= 1
+                        cv2.ellipse(mask, (cx, cy), (rx, ry), 0, 0, 360, 255, -1)
                     else:
-                        inside = (cx - rx <= fx <= cx + rx) and (cy - ry <= fy <= cy + ry)
+                        cv2.rectangle(mask,
+                                    (cx - rx, cy - ry),
+                                    (cx + rx, cy + ry),
+                                    255, -1)
 
-                    if inside:
-                        mask = np.zeros_like(gray, dtype=np.uint8)
-
-                        if r["shape"] == "ellipse":
-                            cv2.ellipse(mask, (cx, cy), (rx, ry), 0, 0, 360, 255, -1)
-                        else:
-                            cv2.rectangle(mask,
-                                        (cx - rx, cy - ry),
-                                        (cx + rx, cy + ry),
-                                        255, -1)
-
-                        sum_int = int(np.sum(gray[mask == 255]))
-
-                        hover_feed_info = (rid, sum_int, mouse_x, mouse_y)
-                        break
+                    sum_int = int(np.sum(gray[mask == 255]))
+                    hover_feed_info = (rid, sum_int, mouse_x, mouse_y)
+                    break
                         
             # ---------------- Hover Tooltips ----------------
 
-            if hover_plot_info:
-                rid, tval, yval, mx, my = hover_plot_info
-                txt = f"ROI {rid} | t={tval:.2f}s | I={yval:.2f}"
-
-                (tw, th), _ = cv2.getTextSize(txt,
-                                            cv2.FONT_HERSHEY_SIMPLEX,
-                                            0.45, 1)
-
-                pad = 6
-                box_w = tw + pad * 2
-                box_h = th + pad * 2
-
-                # default position (right & above cursor)
-                bx = mx + 12
-                by = my - box_h - 8
-
-                H, W = display.shape[:2]
-
-                # clamp right edge
-                if bx + box_w > W:
-                    bx = W - box_w - 5
-
-                # clamp left edge
-                if bx < 0:
-                    bx = 5
-
-                # clamp top edge
-                if by < 0:
-                    by = my + 12
-
-                # clamp bottom edge
-                if by + box_h > H:
-                    by = H - box_h - 5
-
-                cv2.rectangle(display,
-                            (bx, by),
-                            (bx + box_w, by + box_h),
-                            (30, 30, 30), -1)
-
-                cv2.putText(display, txt,
-                            (bx + pad, by + box_h - pad),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.45, (255, 255, 255), 1, cv2.LINE_AA)
-
+            
             if hover_feed_info:
                 rid, sum_int, mx, my = hover_feed_info
                 txt = f"ROI {rid} SUM = {sum_int}"
@@ -783,7 +627,7 @@ def main():
             
             # ----- ROI Monitor Popout -----
             with roi_lock:
-                extra_rois = sorted(roi.rois.keys())[2:]
+                extra_rois = sorted(roi.rois.keys())
 
             if len(extra_rois) > 0:
 
@@ -966,12 +810,8 @@ def main():
                         log_buffer.clear()
 
                 roi.reset()
-                y_anim_1.clear()
-                y_anim_2.clear()
+                
 
-            # toggle full view
-            elif key in (ord('f'), ord('F')):
-                show_plot = not show_plot
             
             # line toggle
             elif key == ord('l') or key == ord('L'):
