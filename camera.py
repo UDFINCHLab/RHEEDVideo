@@ -20,7 +20,29 @@ class Camera:
 
         self.cam = self.cam_list[0]
         self.cam.Init()
+
+        # Always set nodemap immediately (do NOT put this inside buffer_count block)
         self.nodemap = self.cam.GetNodeMap()
+
+        # ---- Improve stream buffering to prevent frame drops ----
+        s_node_map = self.cam.GetTLStreamNodeMap()
+
+        handling_mode = PySpin.CEnumerationPtr(s_node_map.GetNode("StreamBufferHandlingMode"))
+        if PySpin.IsAvailable(handling_mode) and PySpin.IsWritable(handling_mode):
+            entry = handling_mode.GetEntryByName("OldestFirst")
+            if PySpin.IsAvailable(entry) and PySpin.IsReadable(entry):
+                handling_mode.SetIntValue(entry.GetValue())
+
+        buffer_mode = PySpin.CEnumerationPtr(s_node_map.GetNode("StreamBufferCountMode"))
+        if PySpin.IsAvailable(buffer_mode) and PySpin.IsWritable(buffer_mode):
+            entry = buffer_mode.GetEntryByName("Manual")
+            if PySpin.IsAvailable(entry) and PySpin.IsReadable(entry):
+                buffer_mode.SetIntValue(entry.GetValue())
+
+        buffer_count = PySpin.CIntegerPtr(s_node_map.GetNode("StreamBufferCountManual"))
+        if PySpin.IsAvailable(buffer_count) and PySpin.IsWritable(buffer_count):
+            # 100 is okay; for GigE you can try 200 if RAM is fine
+            buffer_count.SetValue(100)
 
         # Cache ranges + current values (read from camera if available)
         self.exposure_min_us, self.exposure_max_us, self.exposure_us = self._init_exposure()
