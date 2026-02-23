@@ -15,6 +15,7 @@ venv/
 # ---------------------------
 results/
 roi_data/
+captures/
 rheed_videos/
 *.log
 
