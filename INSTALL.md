@@ -1,171 +1,314 @@
 # RHEED-ML-PIPELINE – Installation Guide
 
-This project uses:
-- Python 3.10 (required)
-- FLIR Spinnaker SDK 4.2.x
-- PySpin / spinnaker-python (installed from local wheel)
-- PyTorch, OpenCV, NumPy, Matplotlib
+Repository:
+[https://github.com/UDFINCHLab/RHEEDVideo.git](https://github.com/UDFINCHLab/RHEEDVideo.git)
 
-Follow the steps below to run this project on a new machine.
-
----
-## FOR INSTALLATION VIA THE COMMAND PROMPT TERMINAL:
-
-### 1. Install FLIR Spinnaker SDK (required; must be installed before installing PySpin) 
-
-Download and install **Spinnaker SDK 4.2.x** for Windows 64-bit.
-
-During installation, select:
-- Spinnaker Runtime  
-- GenICam Runtime  
-- Camera Drivers (USB / PCIe)
-
-Restart the computer if recommended.
+This guide explains how to properly clone, set up, and run the RHEED real-time dashboard and ML pipeline on a new Windows machine.
 
 ---
 
-### 2. From the Command Prompt Terminal:
+# System Requirements
 
+This project requires:
 
-#### a. Install Python 3.10 (required) built-in Python Launcher
-
----
-py install 3.10
-
-
-#### b. Verify installation
----
-py -3.10 --version
-
-#### c. Create your venv using Python 3.10 in the "rheed-ml-pipeline-main" directory
----
-py -3.10 -m venv .venv
-
-#### d. Activate the new virtual environment (after activation, your path should be preceded by "(.venv)" )
----
-.venv\Scripts\activate
-
-#### e. Install dependencies
----
-pip install -r requirements.txt
-
-#### f. Install the spinnaker_python wheel file (this requires the wheel file to be in the "third_party" subdirectory)
----
-pip install third_party\spinnaker_python-4.2.0.88-cp310-cp310-win_amd64.whl
-
-#### g. Verify PySpin installation 
----
-py -c "import PySpin; print('PySpin OK')"
-
+* Windows 64-bit
+* Python 3.10 (required)
+* FLIR Spinnaker SDK 4.2.x
+* Blackfly camera (optional — DummyCamera runs without hardware)
 
 ---
 
-### 3. Prepare the Project Folder
+# 1️⃣ Install FLIR Spinnaker SDK (REQUIRED for real camera use)
 
-Place the project folder anywhere on your system.
+Download and install:
 
-Create the following structure:
+Spinnaker SDK 4.2.x (Windows 64-bit)
 
+During installation, ensure the following are selected:
+
+* Spinnaker Runtime
+* GenICam Runtime
+* Camera Drivers (USB / PCIe)
+
+After installation:
+
+Restart your computer if prompted.
+
+⚠ Important:
+SpinView must be closed before running the Python dashboard.
+
+---
+
+# 2️⃣ Clone the GitHub Repository
+
+Open Command Prompt or PowerShell and run:
+
+```bash
+git clone https://github.com/UDFINCHLab/RHEEDVideo.git
+cd RHEEDVideo
 ```
 
-RHEED-ML-PIPELINE/
-│
-├── camera.py
-├── main.py
-├── ML_model.py
-├── roi_manager.py
-├── test_camera.py
-├── rheed_gradient_lut.npy
-├── results.csv
-├── requirements.txt
-├── INSTALL.md
-│
-└── third_party/
-└── spinnaker_python-4.2.0.88-cp310-cp310-win_amd64.whl
+You should now see files like:
 
-````
-
-**Important Notes:**
-- The Spinnaker wheel file *must* be inside the `third_party/` directory  
-- The wheel must match your Python version: **Python 3.10 (cp310)**  
+* main.py
+* camera.py
+* dummy_camera.py
+* roi_manager.py
+* requirements.txt
+* INSTALL.md
+* RHEED_RUN.cmd.bat
+* etc.
 
 ---
 
-## 4. Create a Virtual Environment
+# 3️⃣ Install Python 3.10
 
-Open PowerShell inside the project folder:
+Install Python 3.10 using the Python launcher:
 
-```powershell
-python -m venv .venv
-````
+```bash
+py install 3.10
+```
+
+Verify installation:
+
+```bash
+py -3.10 --version
+```
+
+It must show Python 3.10.x
+
+⚠ Do NOT use Python 3.11 or 3.12 — PySpin wheel requires 3.10.
+
+---
+
+# 4️⃣ Create Virtual Environment (REQUIRED)
+
+Inside the cloned repository folder:
+
+```bash
+py -3.10 -m venv .venv
+```
 
 Activate it:
 
-```powershell
-.\.venv\Scripts\activate
+```bash
+.venv\Scripts\activate
+```
+
+After activation, your prompt should begin with:
+
+```
+(.venv)
 ```
 
 ---
 
-## 5. Install Python Requirements
+# 5️⃣ Install Python Dependencies
 
-```powershell
+With the virtual environment activated:
+
+```bash
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
+This installs:
+
+* numpy
+* opencv-python
+* matplotlib
+* scikit-learn
+* h5py
+* scipy
+* torch (optional ML)
+* pandas
+* tqdm
+
 ---
 
-## 6. Install PySpin / Spinnaker Python Wheel
+# 6️⃣ Install PySpin (Spinnaker Python Wheel)
 
-```powershell
-pip install .\third_party\spinnaker_python-4.2.0.88-cp310-cp310-win_amd64.whl
+⚠ This project requires a local Spinnaker Python wheel.
+
+The wheel must match:
+
+* Python 3.10
+* Windows 64-bit
+* Spinnaker 4.2.x
+
+If the repository includes:
+
+```
+third_party/spinnaker_python-4.2.0.88-cp310-cp310-win_amd64.whl
 ```
 
+Install it using:
+
+```bash
+pip install third_party\spinnaker_python-4.2.0.88-cp310-cp310-win_amd64.whl
+```
+
+If you do not see a `third_party` folder:
+You must download the correct wheel from your lab distribution or FLIR installation package.
+
 ---
 
-## 7. Verify PySpin Installation
+# 7️⃣ Verify PySpin Installation
 
 Run:
 
-```powershell
-python -c "import PySpin; print('PySpin OK')"
+```bash
+python check_pyspin.py
 ```
 
 Expected output:
 
 ```
-PySpin OK
+Spinnaker version: X.X.X.X
+Number of cameras detected: X
 ```
 
-If you see DLL-related errors, add these paths to your Windows PATH environment variable:
+OR verify import directly:
+
+```bash
+python -c "import PySpin; print('PySpin OK')"
+```
+
+If you see DLL errors, add the following to your Windows PATH:
 
 ```
 C:\Program Files\FLIR Systems\Spinnaker\bin64
 C:\Program Files\FLIR Systems\Spinnaker\bin64\vs2015
 ```
 
-Then restart your terminal.
+Then restart terminal.
 
 ---
 
-## 8. Run the Project
+# 8️⃣ Running the Dashboard
 
-Make sure the `.venv` is activated, then run:
+With `.venv` activated:
 
-```powershell
+```bash
 python main.py
 ```
 
-The full RHEED ML pipeline should now run correctly.
+You should see:
+
+```
+🚀 RHEED Dashboard (Enhanced Build)
+```
+
+If camera is connected:
+
+```
+📸 Camera initialized
+🎥 Acquisition started
+```
+
+If no camera detected:
+
+```
+⚠ No camera found, using dummy feed.
+```
+
+The dashboard will still run using DummyCamera.
 
 ---
 
-## ✔ Installation Complete
+# 9️⃣ Recording Output Structure
 
-If you followed all steps, the project will work on any Windows machine with a supported FLIR camera.
+Videos are automatically saved to:
 
+```
+rheed_videos/YYYY/Month/MMDDYY/
+```
+
+ROI CSV logs are saved to:
+
+```
+roi_data/YYYY/Month/MMDDYY/
 ```
 
 ---
 
+# 🔟 Running the Offline ML Pipeline
+
+After recording a video:
+
+Place it inside:
+
 ```
+captures/
+```
+
+Then run:
+
+```bash
+python run_full.py
+```
+
+Outputs will be saved in:
+
+```
+results/pre_processing/
+results/pca_plots/
+results/kmeans_plots/
+```
+
+---
+
+# Optional: Run Using Batch Launcher
+
+If using Windows:
+
+Double-click:
+
+```
+RHEED_RUN.cmd.bat
+```
+
+This automatically:
+
+* Activates the virtual environment
+* Runs main.py
+
+---
+
+# Troubleshooting
+
+Problem: Camera not detected
+→ Ensure SpinView is closed
+→ Ensure Spinnaker SDK installed
+→ Check USB connection
+
+Problem: PySpin import error
+→ Confirm Python 3.10
+→ Confirm wheel matches cp310
+→ Confirm PATH variables
+
+Problem: DLL load failed
+→ Add Spinnaker bin64 paths to Windows PATH
+
+---
+
+# ✔ Installation Complete
+
+If all steps are followed correctly:
+
+* Real-time RHEED dashboard will run
+* Hardware FPS lock will work
+* ROI logging will work
+* Recording will work
+* ML pipeline will execute successfully
+
+---
+
+# Important Notes
+
+* Python 3.10 is mandatory
+* Spinnaker SDK must be installed before installing PySpin
+* Always activate `.venv` before running code
+* SpinView must be closed before running main.py
+
+---

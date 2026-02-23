@@ -161,7 +161,6 @@ class ROIManager:
 
     def release(self):
         self.moving = self.resizing = False
-        self.active_roi = None
         self.start_point = None
 
     # ---------- intensity ----------
