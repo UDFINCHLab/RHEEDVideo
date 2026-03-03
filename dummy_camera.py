@@ -65,34 +65,43 @@ class DummyCamera:
         return img
 
     def get_frame(self):
-        """Return a synthetic RHEED-like frame."""
         if not self.running:
             return None
 
+        frame_period = 1.0 / self.fps
+
+        # initialize scheduler
+        if not hasattr(self, "_next_frame_time"):
+            self._next_frame_time = time.perf_counter()
+
+        # ----- BLOCK until next frame time (like real camera) -----
+        now = time.perf_counter()
+        sleep_time = self._next_frame_time - now
+        if sleep_time > 0:
+            time.sleep(sleep_time)
+
+        # schedule next frame
+        self._next_frame_time += frame_period
+
+        # ----- generate synthetic frame -----
         h, w = self.height, self.width
         base = np.zeros((h, w), dtype=np.uint8)
 
-        # Simulate moving diffraction spots
         x1 = int(320 + 120 * np.sin(self.frame_idx * 0.05))
         x2 = int(320 + 150 * np.cos(self.frame_idx * 0.04))
 
         cv2.circle(base, (x1, 180), 35, 180 + int(60 * np.sin(self.frame_idx * 0.1)), -1)
         cv2.circle(base, (x2, 300), 30, 160 + int(70 * np.cos(self.frame_idx * 0.12)), -1)
 
-        # Add random noise
         noise = np.random.randint(0, 15, (h, w), dtype=np.uint8)
         frame = cv2.add(base, noise)
-
-        # Smooth for more realistic appearance
         frame = cv2.GaussianBlur(frame, (5, 5), 0)
 
-        # Apply software "camera controls"
         frame = self._apply_software_controls(frame)
 
         self.frame_idx += 1
-        time.sleep(1 / self.fps)
         return frame
-
+    
     def stop(self):
         print("🛑 Dummy camera stopped.")
         self.running = False
