@@ -229,21 +229,20 @@ def main():
         cam.start()
         
                 # ---------- BLACKFLY FPS INIT ----------
-        TARGET_FPS = 60.0  # default locked FPS
-
+        # ---------- BLACKFLY FPS INIT ----------
         if hasattr(cam, "cam") and hasattr(cam.cam, "AcquisitionFrameRateEnable"):
             try:
                 cam.cam.AcquisitionFrameRateEnable.SetValue(True)
 
                 max_fps = cam.cam.AcquisitionFrameRate.GetMax()
                 min_fps = cam.cam.AcquisitionFrameRate.GetMin()
-
                 print(f"📷 Blackfly FPS capability: {min_fps:.2f} – {max_fps:.2f}")
 
+                # Lock to MAX (real camera supports ~23.10)
+                TARGET_FPS = max_fps
                 cam.cam.AcquisitionFrameRate.SetValue(TARGET_FPS)
 
                 resulting = cam.cam.AcquisitionResultingFrameRate.GetValue()
-
                 print(f"🔒 Camera locked to: {TARGET_FPS:.2f} FPS")
                 print(f"📊 Resulting hardware FPS: {resulting:.2f}")
 
@@ -295,7 +294,6 @@ def main():
     frame_idx = 0
     total_logged_rows = 0
     t0 = time.time()
-    SAVE_ONE_TRIPLET = True
     
     # ---------------------- ROI CSV Logging Setup ----------------------
     session_timestamp = datetime.datetime.now()
@@ -489,30 +487,39 @@ def main():
                 # ---- SAVE ONLY ONE TRIPLET ----
                 if SAVE_ONE_TRIPLET and not triplet_saved and triplet_counter > 10:
                     
-                    os.makedirs("hdr_exposure_triplet", exist_ok=True)
+                    triplet_dir = Path(__file__).resolve().parent / "hdr_exposure_triplet"
+                    triplet_dir.mkdir(exist_ok=True)
 
                     # Remove old files
-                    for f in ["exp1.png", "exp2.png", "exp3.png", "fused_hdr.png"]:
+                    e1, e2, e3 = [int(x) for x in EXPOSURE_CYCLE]
+
+                    files = [
+                        f"exp_{e1}us.png",
+                        f"exp_{e2}us.png",
+                        f"exp_{e3}us.png",
+                        "fused_hdr.png"
+                    ]
+
+                    for f in files:
                         path = os.path.join("hdr_exposure_triplet", f)
                         if os.path.exists(path):
                             os.remove(path)
 
-                    # Apply gradient to each exposure
-                    exp1_color = apply_gradient(hdr_buffer[0])
-                    exp2_color = apply_gradient(hdr_buffer[1])
-                    exp3_color = apply_gradient(hdr_buffer[2])
+                    # Apply gradient to each exposure (COLOR)
+                    exp1_color = apply_gradient(hdr_buffer[0], strength=strength)
+                    exp2_color = apply_gradient(hdr_buffer[1], strength=strength)
+                    exp3_color = apply_gradient(hdr_buffer[2], strength=strength)
 
-                    cv2.imwrite("hdr_exposure_triplet/exp1.png", exp1_color)
-                    cv2.imwrite("hdr_exposure_triplet/exp2.png", exp2_color)
-                    cv2.imwrite("hdr_exposure_triplet/exp3.png", exp3_color)
+                    cv2.imwrite(os.path.join("hdr_exposure_triplet", f"exp_{e1}us.png"), exp1_color)
+                    cv2.imwrite(os.path.join("hdr_exposure_triplet", f"exp_{e2}us.png"), exp2_color)
+                    cv2.imwrite(os.path.join("hdr_exposure_triplet", f"exp_{e3}us.png"), exp3_color)
 
-                    # Save fused with gradient (color)
-                    fused_color = apply_gradient(fused_8)
-                    cv2.imwrite("hdr_exposure_triplet/fused_hdr.png", fused_color)
+                    # Save fused with gradient (COLOR)
+                    fused_color = apply_gradient(fused_8, strength=strength)
+                    cv2.imwrite(os.path.join("hdr_exposure_triplet", "fused_hdr.png"), fused_color)
 
-                    print("✅ Saved one HDR exposure triplet + fused image")
+                    print("✅ Saved ONE HDR triplet (color LUT) + fused_hdr.png")
                     triplet_saved = True
-
                 hdr_buffer.clear()
 
             # ---------------- Recording ----------------
@@ -1121,11 +1128,15 @@ def main():
             new_fps = None
 
             if key == ord('1'):
-                new_fps = 30.0
+                new_fps = 10.0
             elif key == ord('2'):
-                new_fps = 60.0
+                new_fps = 20.0
             elif key == ord('3'):
-                new_fps = 90.0
+                # always go to MAX supported fps
+                if hasattr(cam, "cam") and hasattr(cam.cam, "AcquisitionFrameRate"):
+                    new_fps = cam.cam.AcquisitionFrameRate.GetMax()
+                else:
+                    new_fps = 23.0
 
             if new_fps is not None:
                 if hasattr(cam, "cam") and hasattr(cam.cam, "AcquisitionFrameRate"):
