@@ -10,7 +10,7 @@ from camera import Camera  # add this at top
 
 # ---------------- HDR SETTINGS ----------------
 GAIN_CYCLE = [8.0, 12.0, 24.0]
-TARGET_CAMERA_FPS = 60
+TARGET_CAMERA_FPS = 23
 DISPLAY_WINDOW = "HDR Preview (Dummy)"
 
 # ---------------- GLOBAL STATE ----------------
