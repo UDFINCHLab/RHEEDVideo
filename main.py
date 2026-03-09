@@ -302,7 +302,7 @@ def main():
     # Write CSV header once
     with open(csv_filename, "w") as f:
         f.write(
-            "frame_idx,timestamp_s,roi_uuid,roi_display_id,"
+            "frame_idx,Time Stamp,roi_uuid,roi_display_id,"
             "mean_intensity,sum_intensity,area,cx,cy,rx,ry,shape\n"
         )
         
@@ -474,8 +474,10 @@ def main():
                     rx, ry = r["rx"], r["ry"]
                     shape = r["shape"]
 
+                    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+
                     log_buffer.append(
-                        f"{frame_idx+1},{now:.6f},{r.get('uuid','NA')},{rid},"
+                        f"{frame_idx+1},{timestamp},{r.get('uuid','NA')},{rid},"
                         f"{mean_int:.6f},{sum_int},{area},{cx},{cy},{rx},{ry},{shape}\n"
                     )
                     total_logged_rows += 1

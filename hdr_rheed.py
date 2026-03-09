@@ -14,7 +14,7 @@ from config import VIDEO_OUTPUT_DIR, ROI_OUTPUT_DIR
 from pathlib import Path
 
 
-HDR_MODE = True   # set False for RAW
+HDR_MODE = True  # locked HDR pipeline (no RAW mode)
 
 EXPOSURE_CYCLE = [7500.0, 15000.0, 30000.0]  # microseconds
 GAIN_CONSTANT = 17.5  # fixed gain
@@ -316,7 +316,7 @@ def main():
     # Write CSV header once
     with open(csv_filename, "w") as f:
         f.write(
-            "frame_idx,timestamp_s,roi_uuid,roi_display_id,"
+            "frame_idx,Time Stamp,roi_uuid,roi_display_id,"
             "mean_intensity,sum_intensity,area,cx,cy,rx,ry,shape\n"
         )
         
@@ -448,10 +448,9 @@ def main():
 
         while not stop_event.is_set():
 
-            if HDR_MODE:
-                # Cycle exposure
-                if hasattr(cam, "set_exposure_us"):
-                    cam.set_exposure_us(EXPOSURE_CYCLE[exposure_index])
+            # Cycle HDR exposures
+            if hasattr(cam, "set_exposure_us"):
+                cam.set_exposure_us(EXPOSURE_CYCLE[exposure_index])
 
             frame = cam.get_frame()
             if frame is None:
@@ -459,68 +458,63 @@ def main():
 
             now = time.time() - t0
 
-            # 🔴 RAW MODE
-            if not HDR_MODE:
-                output_frame = frame
-
             # 🔴 HDR MODE
-            else:
-                # Convert to uint8 if needed
-                if frame.dtype != np.uint8:
-                    frame = cv2.convertScaleAbs(frame)
+            # Convert to uint8 if needed
+            if frame.dtype != np.uint8:
+                frame = cv2.convertScaleAbs(frame)
 
-                hdr_buffer.append(frame)
-                exposure_index = (exposure_index + 1) % len(EXPOSURE_CYCLE)
+            hdr_buffer.append(frame)
+            exposure_index = (exposure_index + 1) % len(EXPOSURE_CYCLE)
 
-                if len(hdr_buffer) < 3:
-                    continue
+            if len(hdr_buffer) < 3:
+                continue
 
-                triplet_counter += 1
+            triplet_counter += 1
 
-                # ---- Fuse ----
-                fused = merge_mertens.process(hdr_buffer)
-                fused = cv2.normalize(fused, None, 0, 255, cv2.NORM_MINMAX)
-                fused_8 = fused.astype(np.uint8)
+            # ---- Fuse ----
+            fused = merge_mertens.process(hdr_buffer)
+            fused = cv2.normalize(fused, None, 0, 255, cv2.NORM_MINMAX)
+            fused_8 = fused.astype(np.uint8)
 
-                output_frame = fused_8
+            output_frame = fused_8                        
 
-                # ---- SAVE ONLY ONE TRIPLET ----
-                if SAVE_ONE_TRIPLET and not triplet_saved and triplet_counter > 10:
+            # ---- SAVE ONLY ONE TRIPLET ----
+            if SAVE_ONE_TRIPLET and not triplet_saved and triplet_counter > 10:
                     
-                    triplet_dir = Path(__file__).resolve().parent / "hdr_exposure_triplet"
-                    triplet_dir.mkdir(exist_ok=True)
+                triplet_dir = Path(__file__).resolve().parent / "hdr_exposure_triplet"
+                triplet_dir.mkdir(exist_ok=True)
 
-                    # Remove old files
-                    e1, e2, e3 = [int(x) for x in EXPOSURE_CYCLE]
+                # Remove old files
+                e1, e2, e3 = [int(x) for x in EXPOSURE_CYCLE]
 
-                    files = [
-                        f"exp_{e1}us.png",
-                        f"exp_{e2}us.png",
-                        f"exp_{e3}us.png",
-                        "fused_hdr.png"
-                    ]
+                files = [
+                    f"exp_{e1}us.png",
+                    f"exp_{e2}us.png",
+                    f"exp_{e3}us.png",
+                    "fused_hdr.png"
+                ]
 
-                    for f in files:
-                        path = os.path.join("hdr_exposure_triplet", f)
-                        if os.path.exists(path):
-                            os.remove(path)
+                for f in files:
+                    path = os.path.join("hdr_exposure_triplet", f)
+                    if os.path.exists(path):
+                        os.remove(path)
 
-                    # Apply gradient to each exposure (COLOR)
-                    exp1_color = apply_gradient(hdr_buffer[0], strength=strength)
-                    exp2_color = apply_gradient(hdr_buffer[1], strength=strength)
-                    exp3_color = apply_gradient(hdr_buffer[2], strength=strength)
+                # Apply gradient to each exposure (COLOR)
+                exp1_color = apply_gradient(hdr_buffer[0], strength=strength)
+                exp2_color = apply_gradient(hdr_buffer[1], strength=strength)
+                exp3_color = apply_gradient(hdr_buffer[2], strength=strength)
 
-                    cv2.imwrite(os.path.join("hdr_exposure_triplet", f"exp_{e1}us.png"), exp1_color)
-                    cv2.imwrite(os.path.join("hdr_exposure_triplet", f"exp_{e2}us.png"), exp2_color)
-                    cv2.imwrite(os.path.join("hdr_exposure_triplet", f"exp_{e3}us.png"), exp3_color)
+                cv2.imwrite(os.path.join("hdr_exposure_triplet", f"exp_{e1}us.png"), exp1_color)
+                cv2.imwrite(os.path.join("hdr_exposure_triplet", f"exp_{e2}us.png"), exp2_color)
+                cv2.imwrite(os.path.join("hdr_exposure_triplet", f"exp_{e3}us.png"), exp3_color)
 
-                    # Save fused with gradient (COLOR)
-                    fused_color = apply_gradient(fused_8, strength=strength)
-                    cv2.imwrite(os.path.join("hdr_exposure_triplet", "fused_hdr.png"), fused_color)
+                # Save fused with gradient (COLOR)
+                fused_color = apply_gradient(fused_8, strength=strength)
+                cv2.imwrite(os.path.join("hdr_exposure_triplet", "fused_hdr.png"), fused_color)
 
-                    print("✅ Saved ONE HDR triplet (color LUT) + fused_hdr.png")
-                    triplet_saved = True
-                hdr_buffer.clear()
+                print("✅ Saved ONE HDR triplet (color LUT) + fused_hdr.png")
+                triplet_saved = True
+            hdr_buffer.clear()                
 
             # ---------------- Recording ----------------
             if ml_capture and ml_writer is not None:
@@ -566,8 +560,10 @@ def main():
                     rx, ry = r["rx"], r["ry"]
                     shape = r["shape"]
 
+                    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+
                     log_buffer.append(
-                        f"{frame_idx+1},{now:.6f},{r.get('uuid','NA')},{rid},"
+                        f"{frame_idx+1},{timestamp},{r.get('uuid','NA')},{rid},"
                         f"{mean_int:.6f},{sum_int},{area},{cx},{cy},{rx},{ry},{shape}\n"
                     )
                     total_logged_rows += 1
@@ -590,15 +586,12 @@ def main():
                 latest_frame_idx = frame_idx
 
                 # ---- HDR FPS measurement ----
-                if HDR_MODE:
-                    hdr_frame_counter += 1
-                    elapsed = time.time() - hdr_last_time
-                    if elapsed >= 1.0:
-                        hdr_fps = hdr_frame_counter / elapsed
-                        hdr_frame_counter = 0
-                        hdr_last_time = time.time()
-                else:
-                    hdr_fps = 0.0
+                hdr_frame_counter += 1
+                elapsed = time.time() - hdr_last_time
+                if elapsed >= 1.0:
+                    hdr_fps = hdr_frame_counter / elapsed
+                    hdr_frame_counter = 0
+                    hdr_last_time = time.time()
 
             # Flush CSV occasionally
             if time.time() - last_flush_time[0] > flush_interval:
@@ -635,21 +628,12 @@ def main():
             # -------- Camera settings overlay --------
             hw = getattr(cam, "has_hw_control", False)
 
-            if HDR_MODE:
-                overlay = [
-                    f"Live Feed: {'YES' if hw else 'NO (Dummy)'}",
-                    f"HDR Exposures: {int(EXPOSURE_CYCLE[0])} | {int(EXPOSURE_CYCLE[1])} | {int(EXPOSURE_CYCLE[2])} us",
-                    f"Gain (Locked): {GAIN_CONSTANT:.2f} dB  (g/f adjust)",
-                    "Keys: 7/8/9 Select | +/- Adjust | h Toggle HDR"
-                ]
-            else:
-                overlay = [
-                    f"Live Feed: {'YES' if hw else 'NO (Dummy)'}",
-                    f"Exposure: {exposure_us:.0f} us",
-                    f"Gain:     {gain_db:.2f} dB",
-                    f"Gamma:    {'ON' if gamma_enabled else 'OFF'}  {gamma_val:.2f}",
-                    "Keys: [ ] Expos | - = Gain | j k Gamma | g Toggle"
-                ]
+            overlay = [
+                f"Live Feed: {'YES' if hw else 'NO (Dummy)'}",
+                f"HDR Exposures: {int(EXPOSURE_CYCLE[0])} | {int(EXPOSURE_CYCLE[1])} | {int(EXPOSURE_CYCLE[2])} us",
+                f"Gain (Locked): {GAIN_CONSTANT:.2f} dB",
+                "Keys: 7/8/9 Select | +/- Adjust"
+            ]
                 
             y = 22
             for line in overlay:
@@ -662,7 +646,7 @@ def main():
 
 
 
-            mode_text = "HDR MODE" if HDR_MODE else "RAW MODE"
+            mode_text = "HDR MODE"
             cv2.putText(disp, mode_text, (disp.shape[1] - 180, 40),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (220, 220, 220), 2, cv2.LINE_AA)
             
@@ -718,11 +702,8 @@ def main():
 
             EXPOSURE_COUNT = len(EXPOSURE_CYCLE)
 
-            if HDR_MODE:
-                logical_hdr_fps = hw_fps_display / EXPOSURE_COUNT
-                fps_text = f"Cam FPS: {hw_fps_display:.2f} | HDR FPS: {logical_hdr_fps:.2f}"
-            else:
-                fps_text = f"Cam FPS: {hw_fps_display:.2f}"
+            logical_hdr_fps = hw_fps_display / EXPOSURE_COUNT
+            fps_text = f"Cam FPS: {hw_fps_display:.2f} | HDR FPS: {logical_hdr_fps:.2f}"
 
             # ---- Compute footer size dynamically ----
             footer_text_sample = "Pixel Int: 000.0 | Cam FPS: 000.00 | HDR FPS: 00.00 | Frame: 0000"
@@ -1080,10 +1061,6 @@ def main():
             elif key == ord('m') or key==ord('M'):
                 ml_toggle_request = True
                 
-            elif key == ord('h') or key == ord('H'):
-                HDR_MODE = not HDR_MODE
-                print("HDR MODE:", HDR_MODE)
-                
             
             # -------- HDR Exposure Editing --------
             if HDR_MODE:
@@ -1152,55 +1129,7 @@ def main():
                     except Exception as e:
                         print("⚠️ Failed to change FPS:", e)
 
-            # -------- Camera controls (Exposure / Gain / Gamma) --------
-            if not HDR_MODE:
-            # existing exposure/gain/gamma controls
-            # existing exposure/gain/gamma controls   
-                exp_step = 1000.0    # microseconds
-                gain_step = 0.5      # dB
-                gamma_step = 0.05    # unitless
-
-                if key == ord(']'):   # exposure up
-                    exposure_us = min(exposure_max, exposure_us + exp_step)
-                    if hasattr(cam, "set_exposure_us"):
-                        exposure_us = cam.set_exposure_us(exposure_us)
-
-                elif key == ord('['): # exposure down
-                    exposure_us = max(exposure_min, exposure_us - exp_step)
-                    if hasattr(cam, "set_exposure_us"):
-                        exposure_us = cam.set_exposure_us(exposure_us)
-
-                elif key == ord('='): # gain up
-                    gain_db = min(gain_max, gain_db + gain_step)
-                    if hasattr(cam, "set_gain_db"):
-                        gain_db = cam.set_gain_db(gain_db)
-
-                elif key == ord('-'): # gain down
-                    gain_db = max(gain_min, gain_db - gain_step)
-                    if hasattr(cam, "set_gain_db"):
-                        gain_db = cam.set_gain_db(gain_db)
-
-                elif key == ord('k') or key==ord('K'): # gamma up
-                    gamma_val = min(gamma_max, gamma_val + gamma_step)
-                    if hasattr(cam, "set_gamma"):
-                        gamma_val = cam.set_gamma(gamma_val)
-                    gamma_enabled = True
-                    if hasattr(cam, "set_gamma_enabled"):
-                        gamma_enabled = cam.set_gamma_enabled(True)
-
-                elif key == ord('j') or key == ord('J'): # gamma down
-                    gamma_val = max(gamma_min, gamma_val - gamma_step)
-                    if hasattr(cam, "set_gamma"):
-                        gamma_val = cam.set_gamma(gamma_val)
-                    gamma_enabled = True
-                    if hasattr(cam, "set_gamma_enabled"):
-                        gamma_enabled = cam.set_gamma_enabled(True)
-
-                elif key == ord('g') or key ==ord('G'): # toggle gamma enable
-                    gamma_enabled = not gamma_enabled
-                    if hasattr(cam, "set_gamma_enabled"):
-                        gamma_enabled = cam.set_gamma_enabled(gamma_enabled)
-    
+            
             
             # handle capture toggle
             if ml_toggle_request:
@@ -1234,10 +1163,7 @@ def main():
 
                         EXPOSURE_COUNT = len(EXPOSURE_CYCLE)
 
-                        if HDR_MODE:
-                            actual_fps = round(hardware_fps / EXPOSURE_COUNT, 2)
-                        else:
-                            actual_fps = round(hardware_fps, 2)
+                        actual_fps = round(hardware_fps / EXPOSURE_COUNT, 2)
 
                         print(f"🎥 Recording using logical FPS: {actual_fps:.2f}")
                         

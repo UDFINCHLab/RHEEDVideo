@@ -5,10 +5,11 @@ import time
 
 class DummyCamera:
     """
-    Simulates a live RHEED-like video feed for testing.
-    Also provides Exposure/Gain/Gamma setters (software-applied) so UI can be tested without hardware.
+    Simulates a live RHEED camera using a looping video file.
+    Exposure / Gain / Gamma are applied in software so the UI behaves like a real camera.
     """
-    def __init__(self, width=640, height=480, fps=30):
+
+    def __init__(self, width=640, height=480, fps=30, video_path="RHEED_video_02-25-26_16-35-47.mp4"):
         self.has_hw_control = False
 
         self.width = width
@@ -17,7 +18,10 @@ class DummyCamera:
         self.frame_idx = 0
         self.running = False
 
-        # Typical camera-like ranges (Spinnaker-ish)
+        self.video_path = video_path
+        self.cap = None
+
+        # Typical camera-like ranges
         self.exposure_min_us = 10.0
         self.exposure_max_us = 1_000_000.0
         self.exposure_us = 20_000.0
@@ -31,83 +35,113 @@ class DummyCamera:
         self.gamma = 1.0
         self.gamma_enabled = True
 
-        # Baseline reference for "exposure" brightness scaling on dummy feed
+        # baseline exposure reference
         self._exposure_ref_us = self.exposure_us
 
+    # ------------------------------------------------------------
+    # START CAMERA
+    # ------------------------------------------------------------
     def start(self):
-        print("🎥 Dummy camera started (simulated RHEED feed).")
-        self.running = True
 
+        print("🎥 Dummy camera started (video playback mode).")
+
+        self.cap = cv2.VideoCapture(self.video_path)
+
+        if not self.cap.isOpened():
+            raise RuntimeError(f"❌ Could not open dummy video: {self.video_path}")
+
+        # read video FPS if available
+        video_fps = self.cap.get(cv2.CAP_PROP_FPS)
+        if video_fps > 1:
+            self.fps = video_fps
+
+        self.running = True
+        self._next_frame_time = time.perf_counter()
+
+    # ------------------------------------------------------------
+    # SOFTWARE CAMERA CONTROLS
+    # ------------------------------------------------------------
     def _apply_software_controls(self, frame_u8: np.ndarray) -> np.ndarray:
-        # frame_u8 is grayscale uint8
 
         img = frame_u8.astype(np.float32)
 
-        # Exposure simulation: linear multiplier relative to reference
+        # Exposure simulation
         exp_mult = float(self.exposure_us) / float(self._exposure_ref_us) if self._exposure_ref_us > 0 else 1.0
 
-        # Gain simulation: dB -> linear amplitude multiplier
-        # +6 dB ≈ 2x amplitude => multiplier = 10^(dB/20)
+        # Gain simulation (dB → amplitude)
         gain_mult = 10.0 ** (float(self.gain_db) / 20.0)
 
         img *= (exp_mult * gain_mult)
 
-        # Clamp before gamma
         img = np.clip(img, 0.0, 255.0)
 
-        # Gamma simulation (if enabled)
+        # Gamma simulation
         if self.gamma_enabled and abs(self.gamma - 1.0) > 1e-6:
-            # Standard gamma mapping: out = (in/255)^(1/gamma) * 255
             inv = 1.0 / float(self.gamma)
             img = 255.0 * ((img / 255.0) ** inv)
 
         img = np.clip(img, 0.0, 255.0).astype(np.uint8)
+
         return img
 
+    # ------------------------------------------------------------
+    # FRAME GENERATION (VIDEO LOOP)
+    # ------------------------------------------------------------
     def get_frame(self):
+
         if not self.running:
             return None
 
         frame_period = 1.0 / self.fps
 
-        # initialize scheduler
-        if not hasattr(self, "_next_frame_time"):
-            self._next_frame_time = time.perf_counter()
-
-        # ----- BLOCK until next frame time (like real camera) -----
         now = time.perf_counter()
         sleep_time = self._next_frame_time - now
+
         if sleep_time > 0:
             time.sleep(sleep_time)
 
-        # schedule next frame
         self._next_frame_time += frame_period
 
-        # ----- generate synthetic frame -----
-        h, w = self.height, self.width
-        base = np.zeros((h, w), dtype=np.uint8)
+        ret, frame = self.cap.read()
 
-        x1 = int(320 + 120 * np.sin(self.frame_idx * 0.05))
-        x2 = int(320 + 150 * np.cos(self.frame_idx * 0.04))
+        # restart video when finished
+        if not ret:
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ret, frame = self.cap.read()
 
-        cv2.circle(base, (x1, 180), 35, 180 + int(60 * np.sin(self.frame_idx * 0.1)), -1)
-        cv2.circle(base, (x2, 300), 30, 160 + int(70 * np.cos(self.frame_idx * 0.12)), -1)
+        if frame is None:
+            return None
 
-        noise = np.random.randint(0, 15, (h, w), dtype=np.uint8)
-        frame = cv2.add(base, noise)
-        frame = cv2.GaussianBlur(frame, (5, 5), 0)
+        # convert to grayscale like real camera
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
+        # resize to camera resolution
+        frame = cv2.resize(frame, (self.width, self.height))
+
+        # apply software exposure/gain/gamma
         frame = self._apply_software_controls(frame)
 
         self.frame_idx += 1
+
         return frame
-    
+
+    # ------------------------------------------------------------
+    # STOP CAMERA
+    # ------------------------------------------------------------
     def stop(self):
+
         print("🛑 Dummy camera stopped.")
+
         self.running = False
 
-    # ----- same public API as real camera -----
+        if self.cap is not None:
+            self.cap.release()
+
+    # ------------------------------------------------------------
+    # CAMERA API COMPATIBILITY
+    # ------------------------------------------------------------
     def get_settings(self):
+
         return {
             "has_hw_control": False,
             "exposure_us": self.exposure_us,
@@ -123,21 +157,30 @@ class DummyCamera:
         }
 
     def set_exposure_us(self, value_us: float):
+
         self.exposure_us = float(max(self.exposure_min_us, min(self.exposure_max_us, float(value_us))))
+
         return self.exposure_us
 
     def set_gain_db(self, value_db: float):
+
         self.gain_db = float(max(self.gain_min_db, min(self.gain_max_db, float(value_db))))
+
         return self.gain_db
 
     def set_gamma_enabled(self, enabled: bool):
+
         self.gamma_enabled = bool(enabled)
+
         return self.gamma_enabled
 
     def set_gamma(self, gamma_value: float):
+
         self.gamma = float(max(self.gamma_min, min(self.gamma_max, float(gamma_value))))
         self.gamma_enabled = True
+
         return self.gamma
-    
+
     def get_fps(self):
+
         return float(self.fps)
