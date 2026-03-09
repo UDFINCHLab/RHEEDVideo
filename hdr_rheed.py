@@ -16,10 +16,14 @@ from pathlib import Path
 
 HDR_MODE = True  # locked HDR pipeline (no RAW mode)
 
-EXPOSURE_CYCLE = [7500.0, 15000.0, 30000.0]  # microseconds
+EXPOSURE_CYCLE = [5000.0, 15000.0, 45000.0]  # microseconds
 GAIN_CONSTANT = 17.5  # fixed gain
 
-merge_mertens = cv2.createMergeMertens()
+merge_mertens = cv2.createMergeMertens(
+    contrast_weight=0,
+    saturation_weight=0,
+    exposure_weight=1
+)
 SAVE_ONE_TRIPLET = True
 
 
@@ -185,6 +189,7 @@ def main():
     selected_hdr_index = 0
     hdr_step = 500.0
     gain_step_hdr = 0.5
+    pending_exposure_cycle = EXPOSURE_CYCLE.copy()
     roi = ROIManager()
     line_manager = LineManager()
     
@@ -199,6 +204,7 @@ def main():
     latest_disp = None
     latest_now = 0.0
     latest_frame_idx = 0
+    hdr_cycle_dirty = False
     # ---- HDR FPS measurement ----
     hdr_frame_counter = 0
     hdr_fps = 0.0
@@ -434,45 +440,89 @@ def main():
         # ---------------- WORKER THREAD ----------------
     def capture_loop():
         """Acquisition loop supporting RAW and HDR fusion."""
-        nonlocal ml_capture, ml_writer, ml_frame_count
-        
+        nonlocal ml_capture, ml_writer, ml_frame_count, hdr_cycle_dirty
+            
 
         exposure_index = 0
         hdr_buffer = []
         triplet_counter = 0
         triplet_saved = False
+        cycle = EXPOSURE_CYCLE.copy()
 
-        # Fix gain once
-        if hasattr(cam, "set_gain_db"):
-            cam.set_gain_db(GAIN_CONSTANT)
+        # Track last applied gain
+        last_gain = None
 
         while not stop_event.is_set():
+            # If user changed HDR exposures, restart the triplet cleanly
+            if hdr_cycle_dirty:
+
+                cycle = EXPOSURE_CYCLE.copy()
+                hdr_buffer.clear()
+                exposure_index = 0
+
+                # Flush camera pipeline (remove old exposure frames)
+                for _ in range(6):
+                    cam.get_frame()
+
+                # Clear queued frames waiting for processing
+                try:
+                    while True:
+                        frame_q.get_nowait()
+                except queue.Empty:
+                    pass
+
+                hdr_cycle_dirty = False
+                continue
 
             # Cycle HDR exposures
+            # ---------- HDR Exposure Capture ----------
+            current_exposure = cycle[exposure_index]
+
             if hasattr(cam, "set_exposure_us"):
-                cam.set_exposure_us(EXPOSURE_CYCLE[exposure_index])
+                cam.set_exposure_us(current_exposure)
+
+            # discard unstable frames (sensor latency)
+            cam.get_frame()
+            cam.get_frame()
+            cam.get_frame()
 
             frame = cam.get_frame()
+            
             if frame is None:
                 continue
 
             now = time.time() - t0
 
-            # 🔴 HDR MODE
-            # Convert to uint8 if needed
+            # convert safely to uint8
             if frame.dtype != np.uint8:
-                frame = cv2.convertScaleAbs(frame)
+                frame = cv2.normalize(frame, None, 0, 255, cv2.NORM_MINMAX)
+                frame = frame.astype(np.uint8)
+
+            frame = cv2.resize(frame, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA)    
 
             hdr_buffer.append(frame)
-            exposure_index = (exposure_index + 1) % len(EXPOSURE_CYCLE)
 
-            if len(hdr_buffer) < 3:
+            # downscale for HDR fusion speed
+            
+
+            exposure_index = (exposure_index + 1) % len(cycle)
+
+            # wait until we have a full HDR triplet
+            if len(hdr_buffer) < len(cycle):
                 continue
 
             triplet_counter += 1
 
             # ---- Fuse ----
-            fused = merge_mertens.process(hdr_buffer)
+            imgs = []
+
+            #max_exp = max(cycle)
+
+            for img in hdr_buffer:
+                img_f = img.astype(np.float32) / 255.0
+                img_f = img_f ** 0.9
+                imgs.append(np.clip(img_f, 0, 1))
+            fused = merge_mertens.process(imgs)
             fused = cv2.normalize(fused, None, 0, 255, cv2.NORM_MINMAX)
             fused_8 = fused.astype(np.uint8)
 
@@ -485,7 +535,7 @@ def main():
                 triplet_dir.mkdir(exist_ok=True)
 
                 # Remove old files
-                e1, e2, e3 = [int(x) for x in EXPOSURE_CYCLE]
+                e1, e2, e3 = [int(x) for x in cycle]
 
                 files = [
                     f"exp_{e1}us.png",
@@ -537,6 +587,7 @@ def main():
         nonlocal hdr_frame_counter, hdr_fps, hdr_last_time
 
         while not stop_event.is_set():
+            # Apply gain if user changed it
             try:
                 frame, now = frame_q.get(timeout=0.2)
             except queue.Empty:
@@ -630,9 +681,10 @@ def main():
 
             overlay = [
                 f"Live Feed: {'YES' if hw else 'NO (Dummy)'}",
-                f"HDR Exposures: {int(EXPOSURE_CYCLE[0])} | {int(EXPOSURE_CYCLE[1])} | {int(EXPOSURE_CYCLE[2])} us",
+                f"Active HDR:  {int(EXPOSURE_CYCLE[0])} | {int(EXPOSURE_CYCLE[1])} | {int(EXPOSURE_CYCLE[2])} us",
+                f"Pending HDR: {int(pending_exposure_cycle[0])} | {int(pending_exposure_cycle[1])} | {int(pending_exposure_cycle[2])} us",
                 f"Gain (Locked): {GAIN_CONSTANT:.2f} dB",
-                "Keys: 7/8/9 Select | +/- Adjust"
+                "Keys: 7/8/9 Select | +/- Adjust | U Apply"
             ]
                 
             y = 22
@@ -1078,15 +1130,20 @@ def main():
                     print("Editing HDR Exposure 3")
 
                 elif key == ord('+') or key == ord('='):
-                    EXPOSURE_CYCLE[selected_hdr_index] += hdr_step
-                    print("HDR exposures:", EXPOSURE_CYCLE)
+                    pending_exposure_cycle[selected_hdr_index] += hdr_step
+                    print("Pending HDR exposures:", pending_exposure_cycle)
 
                 elif key == ord('-'):
-                    EXPOSURE_CYCLE[selected_hdr_index] = max(
+                    pending_exposure_cycle[selected_hdr_index] = max(
                         1000.0,
-                        EXPOSURE_CYCLE[selected_hdr_index] - hdr_step
+                        pending_exposure_cycle[selected_hdr_index] - hdr_step
                     )
-                    print("HDR exposures:", EXPOSURE_CYCLE)    
+                    print("Pending HDR exposures:", pending_exposure_cycle) 
+
+                elif key == ord('u') or key == ord('U'):
+                    EXPOSURE_CYCLE[:] = pending_exposure_cycle
+                    hdr_cycle_dirty = True
+                    print("✅ Applied HDR exposures:", EXPOSURE_CYCLE)
                     
                     # ----- Gain adjustment in HDR -----
                 elif key == ord('g'):
@@ -1163,7 +1220,7 @@ def main():
 
                         EXPOSURE_COUNT = len(EXPOSURE_CYCLE)
 
-                        actual_fps = round(hardware_fps / EXPOSURE_COUNT, 2)
+                        actual_fps = max(3.0, hdr_fps)
 
                         print(f"🎥 Recording using logical FPS: {actual_fps:.2f}")
                         
