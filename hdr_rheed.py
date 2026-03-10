@@ -514,19 +514,45 @@ def main():
             triplet_counter += 1
 
             # ---- Fuse ----
+            # ---- Fuse (Exposure compensated HDR) ----
             imgs = []
 
-            #max_exp = max(cycle)
+            for img, exp in zip(hdr_buffer, cycle):
 
-            for img in hdr_buffer:
+                # normalize image
                 img_f = img.astype(np.float32) / 255.0
-                img_f = img_f ** 0.9
+
+                # exposure compensation
+                img_f = img_f / (exp / max(cycle))
+
                 imgs.append(np.clip(img_f, 0, 1))
+
+            # Merge exposures
             fused = merge_mertens.process(imgs)
+
+            # Normalize to display range
             fused = cv2.normalize(fused, None, 0, 255, cv2.NORM_MINMAX)
             fused_8 = fused.astype(np.uint8)
 
-            output_frame = fused_8                        
+
+            # ---- Temporal HDR stabilization ----
+            if not hasattr(capture_loop, "prev_hdr"):
+                capture_loop.prev_hdr = fused_8
+
+            alpha = 0.7  # smoothing strength
+
+            fused_8 = cv2.addWeighted(
+                capture_loop.prev_hdr,
+                alpha,
+                fused_8,
+                1 - alpha,
+                0
+            )
+
+            capture_loop.prev_hdr = fused_8
+
+
+            output_frame = fused_8                      
 
             # ---- SAVE ONLY ONE TRIPLET ----
             if SAVE_ONE_TRIPLET and not triplet_saved and triplet_counter > 10:
@@ -683,8 +709,9 @@ def main():
                 f"Live Feed: {'YES' if hw else 'NO (Dummy)'}",
                 f"Active HDR:  {int(EXPOSURE_CYCLE[0])} | {int(EXPOSURE_CYCLE[1])} | {int(EXPOSURE_CYCLE[2])} us",
                 f"Pending HDR: {int(pending_exposure_cycle[0])} | {int(pending_exposure_cycle[1])} | {int(pending_exposure_cycle[2])} us",
-                f"Gain (Locked): {GAIN_CONSTANT:.2f} dB",
-                "Keys: 7/8/9 Select | +/- Adjust | U Apply"
+                f"Gain: {GAIN_CONSTANT:.2f} dB",
+                f"Gamma: {'ON' if gamma_enabled else 'OFF'}  {gamma_val:.2f}",
+                "Keys: 7/8/9 Select | +/- Adjust | U Apply | K/J Gamma | H Toggle"
             ]
                 
             y = 22
@@ -784,10 +811,9 @@ def main():
             )
 
             # Determine available height for feed (excluding footer)
-            footer_height = FOOTER_HEIGHT
-
-            feed_height = disp.shape[0] - footer_height
-            feed_width  = disp.shape[1]
+            # Determine available height for feed (excluding footer)
+            feed_height = disp.shape[0]
+            feed_width = disp.shape[1]
 
             # Apply aspect-preserving scaling
             disp_fitted, feed_scale, feed_x_offset, feed_y_offset = fit_preserve_aspect(
@@ -1157,7 +1183,35 @@ def main():
                     if hasattr(cam, "set_gain_db"):
                         cam.set_gain_db(GAIN_CONSTANT)
                     print("HDR Gain:", GAIN_CONSTANT)    
-                
+
+
+                # -------- Gamma control (same as main.py) --------
+                gamma_step = 0.05
+
+                if key == ord('k') or key == ord('K'):  # gamma up
+                    gamma_val = min(gamma_max, gamma_val + gamma_step)
+                    if hasattr(cam, "set_gamma"):
+                        gamma_val = cam.set_gamma(gamma_val)
+                    gamma_enabled = True
+                    if hasattr(cam, "set_gamma_enabled"):
+                        gamma_enabled = cam.set_gamma_enabled(True)
+                    print(f"Gamma increased → {gamma_val:.2f}")
+
+                elif key == ord('j') or key == ord('J'):  # gamma down
+                    gamma_val = max(gamma_min, gamma_val - gamma_step)
+                    if hasattr(cam, "set_gamma"):
+                        gamma_val = cam.set_gamma(gamma_val)
+                    gamma_enabled = True
+                    if hasattr(cam, "set_gamma_enabled"):
+                        gamma_enabled = cam.set_gamma_enabled(True)
+                    print(f"Gamma decreased → {gamma_val:.2f}")
+
+                elif key == ord('h') or key == ord('H'):  # gamma toggle
+                    gamma_enabled = not gamma_enabled
+                    if hasattr(cam, "set_gamma_enabled"):
+                        gamma_enabled = cam.set_gamma_enabled(gamma_enabled)
+                    print(f"Gamma enabled: {gamma_enabled}")
+                                
             # ---------- FPS CHANGE KEYS ----------
             new_fps = None
 
