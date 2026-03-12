@@ -9,7 +9,7 @@ class DummyCamera:
     Exposure / Gain / Gamma are applied in software so the UI behaves like a real camera.
     """
 
-    def __init__(self, width=640, height=480, fps=30, video_path="RHEED_video_02-25-26_16-35-47.mp4"):
+    def __init__(self, width=640, height=480, fps=30, video_path="RHEED_video_03-09-26_11-40-38.avi"):
         self.has_hw_control = False
 
         self.width = width
