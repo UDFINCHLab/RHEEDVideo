@@ -9,7 +9,7 @@ class DummyCamera:
     Exposure / Gain / Gamma are applied in software so the UI behaves like a real camera.
     """
 
-    def __init__(self, width=640, height=480, fps=30, video_path="RHEED_video_03-09-26_11-40-38.avi"):
+    def __init__(self, width=1920, height=1200, fps=30, video_path="RHEED_video_03-09-26_11-40-38.avi"):
         self.has_hw_control = False
 
         self.width = width
@@ -114,9 +114,12 @@ class DummyCamera:
 
         # convert to grayscale like real camera
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        
+        # use video native resolution
+        h, w = frame.shape[:2]
+        self.width = w
+        self.height = h
 
-        # resize to camera resolution
-        frame = cv2.resize(frame, (self.width, self.height))
 
         # apply software exposure/gain/gamma
         frame = self._apply_software_controls(frame)
