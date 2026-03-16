@@ -501,8 +501,7 @@ def main():
 
                     raw_frame = raw_frame.astype(np.uint8)
 
-                    if raw_frame.shape != (h, w):
-                        raw_frame = cv2.resize(raw_frame, (w, h))
+                    raw_frame = raw_frame[:h, :w]
 
 
                     # Ensure COLOR frame is correct
@@ -513,17 +512,23 @@ def main():
 
                     color_frame = color_frame.astype(np.uint8)
 
-                    if color_frame.shape[:2] != (h, w):
-                        color_frame = cv2.resize(color_frame, (w, h))
+                    color_frame = color_frame[:h, :w]
+                    
+                    if raw_frame is None or color_frame is None:
+                        continue
 
+                    frame_written = False
 
-                    if ml_writer_raw is not None:
+                    if ml_writer_raw is not None and ml_writer_raw.isOpened():
                         ml_writer_raw.write(raw_frame)
+                        frame_written = True
 
-                    if ml_writer_color is not None:
+                    if ml_writer_color is not None and ml_writer_color.isOpened():
                         ml_writer_color.write(color_frame)
+                        frame_written = True
 
-                    ml_frame_count += 1
+                    if frame_written:
+                        ml_frame_count += 1
 
                 except Exception as e:
                     print("Video write warning:", e)
@@ -1056,14 +1061,9 @@ def main():
 
                         h, w = last_gray_shape
                         fourcc = cv2.VideoWriter_fourcc(*"XVID")
-                        
-                        # Use real hardware FPS
-                        # -------- Determine correct recording FPS --------
 
-                        # Real camera
-                        # Use measured acquisition FPS
-                        actual_fps = capture_fps
-                        
+                        actual_fps = max(1.0, float(capture_fps)) if capture_fps > 0 else 30.0
+
                         ml_writer_raw = cv2.VideoWriter(str(raw_file), fourcc, actual_fps, (w, h), False)
                         ml_writer_color = cv2.VideoWriter(str(color_file), fourcc, actual_fps, (w, h), True)
 
