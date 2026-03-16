@@ -189,13 +189,18 @@ def main():
     latest_now = 0.0
     latest_frame_idx = 0
     # ---- Real FPS measurement ----
-    RECORD_FPS = 20.0
+    capture_counter = 0
+    capture_timer = time.time()
+    capture_fps = 0
+    record_duration = 0
+    effective_fps = 0
+    encoded_duration = 0
     
     
     
     # Buffer of frames between acquisition and processing.
     # 600 frames ≈ 20 seconds at 30 fps. Increase if you have RAM.
-    frame_q = queue.Queue(maxsize=1800)
+    frame_q = queue.Queue(maxsize=1000)
 
 
     # camera
@@ -213,27 +218,13 @@ def main():
             
         cam.start()
         
-                # ---------- BLACKFLY FPS INIT ----------
-        TARGET_FPS = 20.0  # default locked FPS
-
-        if hasattr(cam, "cam") and hasattr(cam.cam, "AcquisitionFrameRateEnable"):
+        if hasattr(cam, "cam") and hasattr(cam.cam, "AcquisitionResultingFrameRate"):
             try:
-                cam.cam.AcquisitionFrameRateEnable.SetValue(True)
-
-                max_fps = cam.cam.AcquisitionFrameRate.GetMax()
-                min_fps = cam.cam.AcquisitionFrameRate.GetMin()
-
-                print(f"📷 Blackfly FPS capability: {min_fps:.2f} – {max_fps:.2f}")
-
-                cam.cam.AcquisitionFrameRate.SetValue(TARGET_FPS)
-
                 resulting = cam.cam.AcquisitionResultingFrameRate.GetValue()
-
-                print(f"🔒 Camera locked to: {TARGET_FPS:.2f} FPS")
-                print(f"📊 Resulting hardware FPS: {resulting:.2f}")
-
-            except Exception as e:
-                print("⚠️ FPS lock not supported:", e)
+                print(f"📷 Camera acquisition FPS: {resulting:.2f}")
+            except:
+                pass
+        
         
     except Exception as e:
         print(f"⚠️ No camera found, using dummy feed. ({e})")
@@ -302,7 +293,7 @@ def main():
     # Write CSV header once
     with open(csv_filename, "w") as f:
         f.write(
-            "frame_idx,Time Stamp,roi_uuid,roi_display_id,"
+            "frame_idx,Time Stamp,camera_time,video_frame,roi_uuid,roi_display_id,"
             "mean_intensity,sum_intensity,area,cx,cy,rx,ry,shape\n"
         )
         
@@ -318,12 +309,15 @@ def main():
 
     # ML capture state only (process removed)
     ml_capture = False
-    ml_writer = None
-    ml_filename = None
+    ml_writer_raw = None
+    ml_writer_color = None
     ml_frame_count = 0
     ml_toggle_request = False
     record_start_time = None
-    actual_fps = RECORD_FPS
+    record_duration = 0
+    effective_fps = 0
+    encoded_duration = 0
+    actual_fps = 0.0
     last_gray_shape = None
     feed_scale = 1.0
     feed_x_offset = 0
@@ -420,23 +414,25 @@ def main():
         # ---------------- WORKER THREAD ----------------
     def capture_loop():
         """Fast acquisition + immediate recording."""
-        nonlocal ml_capture, ml_writer, ml_frame_count
+        nonlocal ml_capture, ml_writer_raw, ml_writer_color, ml_frame_count
+        nonlocal capture_counter, capture_timer, capture_fps
 
         while not stop_event.is_set():
             frame = cam.get_frame()
             if frame is None:
                 continue
 
+            # -------- Measure real acquisition FPS --------
+            capture_counter += 1
+            if time.time() - capture_timer >= 1.0:
+                capture_fps = capture_counter
+                capture_counter = 0
+                capture_timer = time.time()
+
             
 
             now = time.time() - t0
 
-            # 🔴 RECORD IMMEDIATELY AFTER ACQUISITION
-            if ml_capture and ml_writer is not None:
-                gray_local = frame if frame.ndim == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                colored = apply_gradient(gray_local, strength=strength)
-                ml_writer.write(colored)
-                ml_frame_count += 1
 
             try:
                 frame_q.put_nowait((frame, now))
@@ -448,7 +444,7 @@ def main():
         """All heavier work happens here: ROI, overlays, logging, recording, UI buffers."""
         nonlocal frame_idx, total_logged_rows
         nonlocal latest_gray, latest_disp, latest_now, latest_frame_idx
-        nonlocal ml_capture, ml_writer, ml_frame_count, last_gray_shape
+        nonlocal ml_capture, ml_writer_raw, ml_writer_color, ml_frame_count, last_gray_shape
 
         while not stop_event.is_set():
             try:
@@ -461,6 +457,7 @@ def main():
 
             with roi_lock:
                 roi.update_intensities(gray, now)
+                video_frame = ml_frame_count if ml_capture else "NaN"
 
                 for rid, r in roi.rois.items():
                     if len(r["t"]) == 0:
@@ -475,9 +472,12 @@ def main():
                     shape = r["shape"]
 
                     timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+                    camera_time = f"{now:.6f}"
+
+                    video_frame = ml_frame_count if ml_capture else "NaN"
 
                     log_buffer.append(
-                        f"{frame_idx+1},{timestamp},{r.get('uuid','NA')},{rid},"
+                        f"{frame_idx+1},{timestamp},{camera_time},{video_frame},{r.get('uuid','NA')},{rid},"
                         f"{mean_int:.6f},{sum_int},{area},{cx},{cy},{rx},{ry},{shape}\n"
                     )
                     total_logged_rows += 1
@@ -487,6 +487,46 @@ def main():
 
             disp = apply_gradient(gray, strength=strength) \
                 if gradient else cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+                
+            # 🔴 RECORD AFTER PROCESSING
+            if ml_capture:
+
+                try:
+
+                    # Ensure RAW frame is correct
+                    raw_frame = gray
+
+                    if raw_frame.ndim == 3:
+                        raw_frame = cv2.cvtColor(raw_frame, cv2.COLOR_BGR2GRAY)
+
+                    raw_frame = raw_frame.astype(np.uint8)
+
+                    if raw_frame.shape != (h, w):
+                        raw_frame = cv2.resize(raw_frame, (w, h))
+
+
+                    # Ensure COLOR frame is correct
+                    color_frame = disp
+
+                    if color_frame.ndim == 2:
+                        color_frame = cv2.cvtColor(color_frame, cv2.COLOR_GRAY2BGR)
+
+                    color_frame = color_frame.astype(np.uint8)
+
+                    if color_frame.shape[:2] != (h, w):
+                        color_frame = cv2.resize(color_frame, (w, h))
+
+
+                    if ml_writer_raw is not None:
+                        ml_writer_raw.write(raw_frame)
+
+                    if ml_writer_color is not None:
+                        ml_writer_color.write(color_frame)
+
+                    ml_frame_count += 1
+
+                except Exception as e:
+                    print("Video write warning:", e)
 
             with roi_lock:
                 roi.draw_overlays(disp)
@@ -601,10 +641,7 @@ def main():
             # footer bar
             feed_bar = np.zeros((24, disp.shape[1], 3), np.uint8)
             # ---- Get correct hardware FPS display ----
-            if hasattr(cam, "cam") and hasattr(cam.cam, "AcquisitionResultingFrameRate"):
-                hw_fps_display = cam.cam.AcquisitionResultingFrameRate.GetValue()
-            else:
-                hw_fps_display = cam.get_fps()
+            hw_fps_display = capture_fps
 
             cv2.putText(feed_bar,
                         f"Pixel Int: {float(np.mean(gray)):.1f} | FPS: {hw_fps_display:.2f} | Frame: {frame_idx}",
@@ -939,24 +976,7 @@ def main():
             elif key == ord('m') or key==ord('M'):
                 ml_toggle_request = True
                 
-            # ---------- FPS CHANGE KEYS ----------
-            new_fps = None
-
-            if key == ord('1'):
-                new_fps = 10.0
-            elif key == ord('2'):
-                new_fps = 20.0
-            elif key == ord('3'):
-                new_fps = 30.0
-
-            if new_fps is not None:
-                if hasattr(cam, "cam") and hasattr(cam.cam, "AcquisitionFrameRate"):
-                    try:
-                        cam.cam.AcquisitionFrameRate.SetValue(new_fps)
-                        resulting = cam.cam.AcquisitionResultingFrameRate.GetValue()
-                        print(f"🔁 FPS changed → Locked: {new_fps:.2f} | Resulting: {resulting:.2f}")
-                    except Exception as e:
-                        print("⚠️ Failed to change FPS:", e)
+            
                         
 
             # -------- Camera controls (Exposure / Gain / Gamma) --------
@@ -1025,47 +1045,66 @@ def main():
 
                         final_output_path.mkdir(parents=True, exist_ok=True)
 
-                        ml_filename = final_output_path / f"RHEED_video_{timestamp.strftime('%m-%d-%y_%H-%M-%S')}.avi"
+                        raw_dir = final_output_path / "raw"
+                        color_dir = final_output_path / "color"
+
+                        raw_dir.mkdir(parents=True, exist_ok=True)
+                        color_dir.mkdir(parents=True, exist_ok=True)
+
+                        raw_file = raw_dir / f"RHEED_video_{timestamp.strftime('%m-%d-%y_%H-%M-%S')}_raw.avi"
+                        color_file = color_dir / f"RHEED_video_{timestamp.strftime('%m-%d-%y_%H-%M-%S')}_color.avi"
 
                         h, w = last_gray_shape
                         fourcc = cv2.VideoWriter_fourcc(*"XVID")
                         
                         # Use real hardware FPS
-                        if hasattr(cam, "cam") and hasattr(cam.cam, "AcquisitionResultingFrameRate"):
-                            actual_fps = cam.cam.AcquisitionResultingFrameRate.GetValue()
-                        else:
-                            actual_fps = RECORD_FPS
+                        # -------- Determine correct recording FPS --------
 
-                        print(f"🎥 Recording using hardware FPS: {actual_fps:.2f}")
+                        # Real camera
+                        # Use measured acquisition FPS
+                        actual_fps = capture_fps
                         
-                        ml_writer = cv2.VideoWriter(str(ml_filename), fourcc, actual_fps, (w, h), True)
+                        ml_writer_raw = cv2.VideoWriter(str(raw_file), fourcc, actual_fps, (w, h), False)
+                        ml_writer_color = cv2.VideoWriter(str(color_file), fourcc, actual_fps, (w, h), True)
 
-                        if not ml_writer.isOpened():
+                        if not ml_writer_raw.isOpened() or not ml_writer_color.isOpened():
                             print("❌ Failed to open VideoWriter for ML capture.")
-                            ml_writer = None
+                            ml_writer_raw = None
+                            ml_writer_color = None
                         else:
                             ml_capture = True
-                            ml_frame_count = 0
                             record_start_time = time.time()
-                            print(f"📥 ML capture STARTED → {ml_filename}")
+                            ml_frame_count = 0
+
+                            print(f"📥 ML capture STARTED")
+                            print(f"   RAW   → {raw_file}")
+                            print(f"   COLOR → {color_file}")
                 else:
                     # stop capture (NO ML PROCESSING)
-                    if ml_writer is not None:
-                        ml_writer.release()
+                    if ml_writer_raw is not None:
+                        ml_writer_raw.release()
+
+                    if ml_writer_color is not None:
+                        ml_writer_color.release()
 
                         record_duration = time.time() - record_start_time if record_start_time else 0
                         encoded_duration = ml_frame_count / actual_fps if actual_fps > 0 else 0
                         effective_fps = ml_frame_count / record_duration if record_duration > 0 else 0
 
-                        print(f"\n📤 ML capture STOPPED → {ml_filename}")
+                        print("\n📤 ML capture STOPPED")
+                        print(f"   RAW   → {raw_file}")
+                        print(f"   COLOR → {color_file}")
                         print(f"   ⏱ Real recording time: {record_duration:.2f} sec")
                         print(f"   🎞 Frames written: {ml_frame_count}")
                         print(f"   📊 Effective FPS: {effective_fps:.2f}")
                         print(f"   📁 Encoded video duration: {encoded_duration:.2f} sec\n")
 
-                    ml_writer = None
+                    ml_writer_raw = None
+                    ml_writer_color = None
                     ml_capture = False
                     ml_frame_count = 0
+                    raw_file = None
+                    color_file = None
 
     finally:
         stop_event.set()
@@ -1075,9 +1114,16 @@ def main():
         except:
             pass
         
-        if ml_writer is not None:
-            ml_writer.release()
-            print(f"📤 ML capture STOPPED on exit. Saved {ml_frame_count} frames → {ml_filename}")
+        if ml_writer_raw is not None:
+            ml_writer_raw.release()
+
+        if ml_writer_color is not None:
+            ml_writer_color.release()
+
+        if raw_file is not None:
+            print("\n📤 ML capture STOPPED")
+            print(f"   RAW   → {raw_file}")
+            print(f"   COLOR → {color_file}")
             
             
         # ---------------------- Final CSV Flush ----------------------
