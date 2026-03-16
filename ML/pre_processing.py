@@ -23,7 +23,7 @@ SCAR_SCOPE = (10, 10, 150, 25) # (top, bottom, left, right)
 PASSES = 10
 
 CROP_EDGES = False
-CROP = [58, 362, 132, 492] # [top, bottom, left, right]
+CROP = [670, 1706, 806, 2038] # [top, bottom, left, right]
 
 FAKE_HDR = False
 HDR_TYPE = 'Invert' # 'CLAHE' or 'Gamma' or 'Gamma2' or 'Invert'

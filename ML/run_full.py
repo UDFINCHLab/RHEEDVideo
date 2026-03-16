@@ -18,8 +18,8 @@ SCAR_REMOVAL = False
 SCAR_SCOPE = (20, 20, 150, 25)  # (top, bottom, left, right)
 PASSES = 10
 
-CROP_EDGES = False
-CROP = [175, 315, 200, 460]  # [top, bottom, left, right]
+CROP_EDGES = True
+CROP = [670, 1706, 806, 2038] # [top, bottom, left, right]
 
 FAKE_HDR = False
 HDR_TYPE = "Gamma"  # 'CLAHE' or 'Gamma' or 'Gamma2' or 'Invert'

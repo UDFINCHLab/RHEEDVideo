@@ -166,10 +166,7 @@ def plot_eigenvalues_and_vectors(eigen_values: np.ndarray, times: np.ndarray, ei
     
     plot_all_eigen_vectors(eigen_vectors, axes_right)
     
-    plt.tight_layout(pad=0)
-    
     fig.suptitle(f'{title}', fontsize=12, fontweight='bold', x=0.5, y=adjusts[3] + 0.05)
-    
     
     plt.subplots_adjust(left=adjusts[0], bottom=adjusts[1], right=adjusts[2], top=adjusts[3], wspace=adjusts[4], hspace=adjusts[5])
     

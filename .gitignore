@@ -5,11 +5,26 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# video files
+# ---------------------------
+# Video files
+# ---------------------------
 *.avi
 *.mp4
+*.mov
 
+# ---------------------------
+# Image files (plots / debug outputs)
+# ---------------------------
+*.png
+*.jpg
+*.jpeg
+*.tif
+*.tiff
+*.bmp
+
+# ---------------------------
 # Virtual environments
+# ---------------------------
 venv/
 .env/
 .venv/
