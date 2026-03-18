@@ -311,6 +311,8 @@ def main():
     ml_capture = False
     ml_writer_raw = None
     ml_writer_color = None
+    raw_file = None
+    color_file = None
     ml_frame_count = 0
     ml_toggle_request = False
     record_start_time = None
@@ -501,9 +503,6 @@ def main():
 
                     raw_frame = raw_frame.astype(np.uint8)
 
-                    raw_frame = raw_frame[:h, :w]
-
-
                     # Ensure COLOR frame is correct
                     color_frame = disp
 
@@ -511,11 +510,6 @@ def main():
                         color_frame = cv2.cvtColor(color_frame, cv2.COLOR_GRAY2BGR)
 
                     color_frame = color_frame.astype(np.uint8)
-
-                    color_frame = color_frame[:h, :w]
-                    
-                    if raw_frame is None or color_frame is None:
-                        continue
 
                     frame_written = False
 

@@ -149,7 +149,7 @@ class Camera:
 
     def get_frame(self):
         try:
-            image = self.cam.GetNextImage()
+            image = self.cam.GetNextImage(1000)  # 1000ms timeout
             if image.IsIncomplete():
                 image.Release()
                 return None
@@ -258,4 +258,13 @@ class Camera:
         return self.gamma
 
     def get_fps(self):
-        return float(self.cam.AcquisitionFrameRate())
+        try:
+            node = self._get_float_node("AcquisitionResultingFrameRate")
+            if node is not None:
+                return float(node.GetValue())
+            node = self._get_float_node("AcquisitionFrameRate")
+            if node is not None:
+                return float(node.GetValue())
+            return 0.0
+        except Exception:
+            return 0.0

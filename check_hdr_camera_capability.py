@@ -11,10 +11,13 @@ def print_line(title):
     print("=" * 60)
 
 
-def stream_test(cam, seconds=3.0, gain_db=17.5):
-    cam.BeginAcquisition()
-
+def stream_test(cam, seconds=3.0, gain_db=17.5, exposure_us=12000.0):
+    cam.ExposureAuto.SetValue(PySpin.ExposureAuto_Off)
+    cam.GainAuto.SetValue(PySpin.GainAuto_Off)
+    cam.ExposureTime.SetValue(float(exposure_us))
     cam.Gain.SetValue(gain_db)
+
+    cam.BeginAcquisition()
 
     start = time.time()
     frame_count = 0
@@ -85,6 +88,12 @@ def main():
 
         print(f"Locked to MAX FPS → Resulting: {resulting:.2f}")
 
+        print_line("EXPOSURE RANGE")
+        exp_min = cam.ExposureTime.GetMin()
+        exp_max = cam.ExposureTime.GetMax()
+        print(f"Exposure Range: {exp_min:.0f} – {exp_max:.0f} µs")
+        print(f"HDR triplet 5000 | 15000 | 45000 µs → {'✅ supported' if exp_max >= 45000 else '⚠️ 45000 µs EXCEEDS max — reduce long exposure'}")
+
         print_line("GAIN RANGE")
         gain_min = cam.Gain.GetMin()
         gain_max = cam.Gain.GetMax()
@@ -92,11 +101,11 @@ def main():
 
         print_line("STREAM TEST @ MAX FPS")
 
-        frames, sustained, mean_int = stream_test(cam, seconds=3.0, gain_db=17.5)
+        frames, sustained, mean_int = stream_test(cam, seconds=3.0, gain_db=17.5, exposure_us=12000.0)
 
         print(f"Frames captured in 3 sec: {frames}")
         print(f"Sustained FPS: {sustained:.2f}")
-        print(f"Mean intensity @ 17.5 dB: {mean_int:.2f}")
+        print(f"Mean intensity @ gain=17.5dB, exp=12000µs: {mean_int:.2f}")
 
         print_line("DEVICE LINK THROUGHPUT")
         throughput = cam.DeviceLinkCurrentThroughput.GetValue()

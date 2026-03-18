@@ -97,7 +97,9 @@ class DummyCamera:
         now = time.perf_counter()
         sleep_time = self._next_frame_time - now
 
-        if sleep_time > 0:
+        # Only sleep if this is a meaningful wait — skip tiny sleeps
+        # so HDR discard frames don't throttle the pipeline
+        if sleep_time > 0.002:
             time.sleep(sleep_time)
 
         self._next_frame_time += frame_period

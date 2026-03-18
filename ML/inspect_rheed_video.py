@@ -29,11 +29,18 @@ def inspect_video(video_path, sample_frames=10):
     print(f"Pixels/frame   : {width * height}")
     print("======================\n")
 
-    # remove old debug images so they don't accumulate
-    for f in Path(".").glob(f"{DEBUG_PREFIX}*.png"):
+    # Save debug frames to dedicated subfolder
+    debug_dir = Path("inspect_debug")
+    debug_dir.mkdir(exist_ok=True)
+
+    # Remove old debug images
+    for f in debug_dir.glob(f"{DEBUG_PREFIX}*.png"):
         f.unlink()
 
-    frame_indices = sorted(random.sample(range(total_frames), sample_frames))
+    actual_samples = min(sample_frames, total_frames)
+    if actual_samples < sample_frames:
+        print(f"⚠️ Video only has {total_frames} frames, sampling all of them.")
+    frame_indices = sorted(random.sample(range(total_frames), actual_samples))
 
     bounding_boxes = []
 
@@ -45,7 +52,10 @@ def inspect_video(video_path, sample_frames=10):
         if not ret:
             continue
 
-        gray = frame[:, :, 1]  # green channel
+        if frame.ndim == 3:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = frame
 
         norm = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
 
@@ -71,8 +81,8 @@ def inspect_video(video_path, sample_frames=10):
         debug = frame.copy()
         cv2.rectangle(debug, (x, y), (x + w, y + h), (0, 0, 255), 3)
 
-        debug_name = f"{DEBUG_PREFIX}{idx}.png"
-        cv2.imwrite(debug_name, debug)
+        debug_name = debug_dir / f"{DEBUG_PREFIX}{idx}.png"
+        cv2.imwrite(str(debug_name), debug)
 
         print(f"Saved debug frame: {debug_name}")
 
@@ -112,7 +122,10 @@ def inspect_video(video_path, sample_frames=10):
 
 def get_latest_video():
 
-    captures_folder = Path("../captures")
+    captures_folder = Path(__file__).resolve().parent.parent / "captures"
+
+    if not captures_folder.exists():
+        raise Exception(f"No captures folder found at {captures_folder.resolve()}")
 
     video_extensions = ["*.avi", "*.mp4", "*.mov"]
 

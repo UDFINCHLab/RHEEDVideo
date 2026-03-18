@@ -15,8 +15,10 @@ ROI_COLORS = {
     4: (255, 0, 255),     # Magenta
     5: (128, 0, 255),     # Purple
     6: (255, 255, 0),     # Cyan
-    
 }
+
+def _get_roi_color(rid):
+    return ROI_COLORS.get(rid, (200, 200, 200))
 
 
 class ROIManager:
@@ -63,7 +65,7 @@ class ROIManager:
             "rx": int(max(5, rx)),
             "ry": int(max(5, ry)),
             "shape": shape if shape else self.shape_mode,
-            "color": ROI_COLORS[rid],
+            "color": _get_roi_color(rid),
             "t": deque(maxlen=self.max_history),
             "y": deque(maxlen=self.max_history),
         }
@@ -183,9 +185,7 @@ class ROIManager:
 
             moving_avg_window = 15
             summands = list(roi["y"])[-moving_avg_window:]
-            moving_avg = raw_mean
-            moving_avg += np.sum(summands)
-            moving_avg /= (len(summands) + 1)
+            moving_avg = (raw_mean + np.sum(summands)) / (len(summands) + 1)
 
             roi["t"].append(timestamp_s)
             roi["y"].append(moving_avg)

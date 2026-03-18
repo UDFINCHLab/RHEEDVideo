@@ -41,6 +41,12 @@ rheed_videos/
 *.log
 
 # ---------------------------
+# Local launcher scripts (machine-specific paths)
+# ---------------------------
+*.bat
+*.cmd
+
+# ---------------------------
 # Third-party binaries
 # ---------------------------
 third_party/
