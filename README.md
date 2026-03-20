@@ -126,8 +126,8 @@ Popout ROI monitor displaying time-series intensity trends for up to six ROIs, w
 ---
 
 ## 🏗 Current Project Structure
----
-RHEED-ML-PIPELINE-FINAL/
+---text
+RHEEDVideo/
 │
 ├── main.py
 ├── hdr_rheed_base.py
@@ -162,9 +162,7 @@ RHEED-ML-PIPELINE-FINAL/
 ├── roi_data/
 ├── third_party/
 └── venv/
-```
-
----
+---text
 
 # Core Runtime Scripts
 
