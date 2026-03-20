@@ -714,6 +714,8 @@ pandas>=2.0.0
 
 ## Quick setup
 
+> **Detailed setup:** The commands below are a quick-start summary only. For full installation steps, including **Spinnaker SDK setup**, **PySpin wheel installation**, **Windows PATH fixes**, **camera verification**, and **troubleshooting**, please follow **`INSTALL.md`**.
+
 ```bash
 git clone https://github.com/UDFINCHLab/RHEEDVideo.git
 cd RHEEDVideo
