@@ -126,7 +126,8 @@ Popout ROI monitor displaying time-series intensity trends for up to six ROIs, w
 ---
 
 ## 🏗 Current Project Structure
----text
+
+```text
 RHEEDVideo/
 │
 ├── main.py
@@ -162,7 +163,7 @@ RHEEDVideo/
 ├── roi_data/
 ├── third_party/
 └── venv/
----text
+---
 
 # Core Runtime Scripts
 
