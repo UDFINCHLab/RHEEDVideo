@@ -94,9 +94,8 @@ This makes the repository useful for:
 
 
 
+---
 
-
-```
 ## 🖼 Example Dashboards and Analysis Views
 
 ### Standard Live Feed (`main.py`)
@@ -112,23 +111,22 @@ HDR dashboard showing fused multi-exposure live visualization with active/pendin
 ### ROI + Line Overlay View
 Example of multiple user-defined ROIs and a live line profile selection drawn directly on the feed for simultaneous region tracking and line-based intensity extraction.
 
-![ROI and Line Overlay](docs/images/rois_and_line.png)
+![ROI and Line Overlay](docs/images/rois%20and%20line.png)
 
 ### Line Profile Window
 Dedicated line-profile analysis window showing intensity variation along the selected line, including axis labels, grid, elapsed time, and minimum intensity summary.
 
-![Line Profile Window](docs/images/line_plot.png)
+![Line Profile Window](docs/images/line%20plot.png)
 
 ### ROI Monitor Window
 Popout ROI monitor displaying time-series intensity trends for up to six ROIs, with per-ROI elapsed time, min/max statistics, and hover inspection.
 
-![ROI Monitor Window](docs/images/roi_plots.png)
+![ROI Monitor Window](docs/images/roi%20plots.png)
 
 ---
 
 ## 🏗 Current Project Structure
 
-```text
 RHEED-ML-PIPELINE-FINAL/
 │
 ├── main.py
