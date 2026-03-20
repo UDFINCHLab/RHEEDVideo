@@ -1,9 +1,10 @@
+````markdown
 # RHEED-ML-PIPELINE – Installation Guide
 
-Repository:
+Repository:  
 [https://github.com/UDFINCHLab/RHEEDVideo.git](https://github.com/UDFINCHLab/RHEEDVideo.git)
 
-This guide explains how to properly clone, set up, and run the RHEED real-time dashboard and ML pipeline on a new Windows machine.
+This guide explains how to clone, set up, verify, and run the **RHEED real-time dashboard**, **HDR dashboard**, and **offline ML pipeline** on a new Windows machine.
 
 ---
 
@@ -11,31 +12,33 @@ This guide explains how to properly clone, set up, and run the RHEED real-time d
 
 This project requires:
 
-* Windows 64-bit
-* Python 3.10 (required)
-* FLIR Spinnaker SDK 4.2.x
-* Blackfly camera (optional — DummyCamera runs without hardware)
+- Windows 64-bit
+- Python 3.10
+- FLIR Spinnaker SDK 4.2.x
+- Blackfly camera for real hardware acquisition  
+  or
+- dummy video mode for development without hardware
 
 ---
 
-# 1️⃣ Install FLIR Spinnaker SDK (REQUIRED for real camera use)
+# 1️⃣ Install FLIR Spinnaker SDK (Required for Real Camera Use)
 
-Download and install:
+Install **Spinnaker SDK 4.2.x** for Windows 64-bit.
 
-Spinnaker SDK 4.2.x (Windows 64-bit)
+During installation, ensure the following are included:
 
-During installation, ensure the following are selected:
-
-* Spinnaker Runtime
-* GenICam Runtime
-* Camera Drivers (USB / PCIe)
+- Spinnaker Runtime
+- GenICam Runtime
+- Camera Drivers (USB / PCIe, depending on your hardware)
 
 After installation:
 
-Restart your computer if prompted.
+- restart your computer if prompted
 
-⚠ Important:
-SpinView must be closed before running the Python dashboard.
+## Important
+**SpinView must be closed before running the Python dashboards.**
+
+If SpinView is open, PySpin camera access may fail.
 
 ---
 
@@ -46,59 +49,67 @@ Open Command Prompt or PowerShell and run:
 ```bash
 git clone https://github.com/UDFINCHLab/RHEEDVideo.git
 cd RHEEDVideo
-```
+````
 
-You should now see files like:
+You should now see files such as:
 
-* main.py
-* camera.py
-* dummy_camera.py
-* roi_manager.py
-* requirements.txt
-* INSTALL.md
-* RHEED_RUN.cmd.bat
-* etc.
+* `main.py`
+* `hdr_rheed_base.py`
+* `camera.py`
+* `dummy_camera.py`
+* `roi_manager.py`
+* `requirements.txt`
+* `INSTALL.md`
+* `README.md`
+
+You should also see folders such as:
+
+* `ML/`
+* `captures/`
+* `roi_data/`
+* `rheed_videos/`
+* `results/`
+* `third_party/`
 
 ---
 
 # 3️⃣ Install Python 3.10
 
-Install Python 3.10 using the Python launcher:
+Install **Python 3.10.x** on Windows.
 
-```bash
-py install 3.10
-```
-
-Verify installation:
+Then verify:
 
 ```bash
 py -3.10 --version
 ```
 
-It must show Python 3.10.x
+It must report **Python 3.10.x**.
 
-⚠ Do NOT use Python 3.11 or 3.12 — PySpin wheel requires 3.10.
+## Important
+
+Do **not** use Python 3.11, 3.12, or 3.13 for this environment.
+The PySpin wheel used by this project must match Python 3.10.
 
 ---
 
-# 4️⃣ Create Virtual Environment (REQUIRED)
+# 4️⃣ Create a Virtual Environment
 
 Inside the cloned repository folder:
 
 ```bash
-py -3.10 -m venv .venv
+py -3.10 -m venv venv
 ```
 
 Activate it:
 
 ```bash
-.venv\Scripts\activate
+venv\Scripts\activate
 ```
 
-After activation, your prompt should begin with:
+After activation, your prompt should begin with something like:
 
-```
-(.venv)
+```text
+(venv)
 ```
 
 ---
@@ -112,25 +123,24 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-This installs:
+This installs the main Python dependencies used across the dashboard and ML pipeline, including:
 
 * numpy
 * opencv-python
 * matplotlib
+* pillow
 * scikit-learn
 * h5py
 * scipy
-* torch (optional ML)
-* pandas
+* torch
 * tqdm
+* pandas
 
 ---
 
 # 6️⃣ Install PySpin (Spinnaker Python Wheel)
 
-⚠ This project requires a local Spinnaker Python wheel.
-
-The wheel must match:
+This project requires a local Spinnaker Python wheel matching:
 
 * Python 3.10
 * Windows 64-bit
@@ -138,18 +148,17 @@ The wheel must match:
 
 If the repository includes:
 
-```
-third_party/spinnaker_python-4.2.0.88-cp310-cp310-win_amd64.whl
+```text
+third_party\spinnaker_python-4.2.0.88-cp310-cp310-win_amd64.whl
 ```
 
-Install it using:
+install it using:
 
 ```bash
 pip install third_party\spinnaker_python-4.2.0.88-cp310-cp310-win_amd64.whl
 ```
 
-If you do not see a `third_party` folder:
-You must download the correct wheel from your lab distribution or FLIR installation package.
+If the `third_party` folder is missing or the wheel is not present, obtain the correct wheel from your lab distribution or Spinnaker package source.
 
 ---
 
@@ -161,33 +170,48 @@ Run:
 python check_pyspin.py
 ```
 
-Expected output:
-
-```
-Spinnaker version: X.X.X.X
-Number of cameras detected: X
-```
-
-OR verify import directly:
+You can also test the import directly:
 
 ```bash
 python -c "import PySpin; print('PySpin OK')"
 ```
 
-If you see DLL errors, add the following to your Windows PATH:
+If you get DLL-related errors, add the following directories to your Windows PATH:
 
-```
+```text
 C:\Program Files\FLIR Systems\Spinnaker\bin64
 C:\Program Files\FLIR Systems\Spinnaker\bin64\vs2015
 ```
 
-Then restart terminal.
+Then restart your terminal and try again.
 
 ---
 
-# 8️⃣ Running the Dashboard
+# 8️⃣ Verify Camera / HDR Capability (Recommended)
 
-With `.venv` activated:
+Before using HDR mode on a real camera, run:
+
+```bash
+python check_hdr_camera_capability.py
+```
+
+This checks:
+
+* camera detection
+* pixel format
+* FPS capability
+* exposure range
+* gain range
+* stream test performance
+* device link throughput
+
+This is especially useful before running `hdr_rheed_base.py`.
+
+---
+
+# 9️⃣ Run the Standard Live Dashboard
+
+With `venv` activated:
 
 ```bash
 python main.py
@@ -195,62 +219,95 @@ python main.py
 
 You should see:
 
-```
+```text
 🚀 RHEED Dashboard (Enhanced Build)
 ```
 
-If camera is connected:
+If a real camera is connected and available, the script will initialize the Blackfly camera.
 
-```
-📸 Camera initialized
-🎥 Acquisition started
-```
+If no real camera is detected, it will automatically fall back to dummy mode.
 
-If no camera detected:
+Typical fallback message:
 
+```text
+⚠️ No camera found, using dummy feed.
 ```
-⚠ No camera found, using dummy feed.
-```
-
-The dashboard will still run using DummyCamera.
 
 ---
 
-# 9️⃣ Recording Output Structure
+# 🔟 Run the HDR Dashboard
 
-Videos are automatically saved to:
+To run the HDR live pipeline:
 
+```bash
+python hdr_rheed_base.py
 ```
+
+This starts the HDR dashboard, which performs multi-exposure capture and real-time exposure fusion.
+
+Use this mode when you want HDR live visualization instead of the standard single-exposure feed.
+
+---
+
+# 1️⃣1️⃣ Output Folder Structure
+
+## Video recordings
+
+Recorded videos are automatically saved to:
+
+```text
 rheed_videos/YYYY/Month/MMDDYY/
 ```
 
-ROI CSV logs are saved to:
+Each recording session creates separate folders such as:
 
+```text
+raw/
+color/
 ```
+
+## ROI CSV logs
+
+ROI CSV files are saved to:
+
+```text
 roi_data/YYYY/Month/MMDDYY/
+```
+
+## HDR exposure triplets
+
+In HDR mode, a representative triplet may be saved to:
+
+```text
+hdr_exposure_triplet/
+hdr_exposure_triplet/raw_sensor/
 ```
 
 ---
 
-# 🔟 Running the Offline ML Pipeline
+# 1️⃣2️⃣ Run the Offline ML Pipeline
 
-After recording a video:
+After recording a video, place the target video inside:
 
-Place it inside:
-
-```
+```text
 captures/
 ```
 
 Then run:
 
 ```bash
-python run_full.py
+python ML\run_full.py
 ```
 
-Outputs will be saved in:
+Outputs are written under:
 
+```text
+results/
 ```
+
+Depending on the pipeline, this includes folders such as:
+
+```text
 results/pre_processing/
 results/pca_plots/
 results/kmeans_plots/
@@ -258,57 +315,108 @@ results/kmeans_plots/
 
 ---
 
+# 1️⃣3️⃣ Inspect a Video and Suggest a Crop Region
+
+A helper utility is included for quick video inspection:
+
+```bash
+python ML\inspect_rheed_video.py
+```
+
+This script:
+
+* finds the latest video inside `captures/`
+* samples frames
+* detects bright regions
+* saves debug frames
+* suggests a crop region for later processing
+
+Debug output is saved in:
+
+```text
+ML/inspect_debug/
+```
+
+---
+
 # Optional: Run Using Batch Launcher
 
-If using Windows:
+If using Windows, you may also launch the standard dashboard with a batch file such as:
 
-Double-click:
-
-```
+```text
 RHEED_RUN.cmd.bat
 ```
 
-This automatically:
+This is useful for quickly opening the environment and starting the dashboard.
 
-* Activates the virtual environment
-* Runs main.py
+If you maintain a separate HDR batch launcher, it should point to:
+
+```text
+python hdr_rheed_base.py
+```
 
 ---
 
 # Troubleshooting
 
-Problem: Camera not detected
-→ Ensure SpinView is closed
-→ Ensure Spinnaker SDK installed
-→ Check USB connection
+## Problem: Camera not detected
 
-Problem: PySpin import error
-→ Confirm Python 3.10
-→ Confirm wheel matches cp310
-→ Confirm PATH variables
+* ensure SpinView is closed
+* ensure Spinnaker SDK is installed
+* check USB / PCIe / cable connection
+* confirm the camera is visible in SpinView before closing it
 
-Problem: DLL load failed
-→ Add Spinnaker bin64 paths to Windows PATH
+## Problem: PySpin import error
+
+* confirm Python 3.10 is being used
+* confirm the wheel matches `cp310`
+* confirm Spinnaker SDK is installed before the wheel
+* confirm PATH variables include Spinnaker DLL folders if needed
+
+## Problem: DLL load failed
+
+* add Spinnaker `bin64` folders to Windows PATH
+* restart terminal after updating PATH
+
+## Problem: Dashboard opens in dummy mode unexpectedly
+
+* verify the camera is connected
+* verify no other application is using the camera
+* verify SpinView is closed
+* run `python check_pyspin.py`
+
+## Problem: HDR mode performance is slow
+
+* reduce display load from other applications
+* verify camera throughput settings
+* confirm the system is not overloaded
+* use the capability test script to inspect supported FPS and exposure limits
 
 ---
 
 # ✔ Installation Complete
 
-If all steps are followed correctly:
+If all steps are completed correctly, you should be able to:
 
-* Real-time RHEED dashboard will run
-* Hardware FPS lock will work
-* ROI logging will work
-* Recording will work
-* ML pipeline will execute successfully
+* run the standard real-time RHEED dashboard
+* run the HDR live dashboard
+* use ROI drawing and line profile tools
+* record raw and color videos
+* generate ROI CSV logs
+* inspect videos for crop suggestions
+* run the offline ML pipeline
 
 ---
 
 # Important Notes
 
-* Python 3.10 is mandatory
-* Spinnaker SDK must be installed before installing PySpin
-* Always activate `.venv` before running code
-* SpinView must be closed before running main.py
+* Python 3.10 is required
+* Spinnaker SDK must be installed before PySpin
+* always activate `venv` before running the project
+* SpinView must be closed before launching the dashboards
+* `main.py` runs the standard live feed
+* `hdr_rheed_base.py` runs the HDR live feed
+* dummy mode activates automatically when no real camera is available
 
----
+```
+

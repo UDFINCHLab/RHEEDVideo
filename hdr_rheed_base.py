@@ -210,8 +210,7 @@ def main():
     hdr_frame_counter = 0
     hdr_fps = 0.0
     hdr_last_time = time.time()
-    # ---- Real FPS measurement ----
-    RECORD_FPS = 20.0
+    
     
     
     
@@ -349,7 +348,7 @@ def main():
     record_duration = 0
     effective_fps = 0
     encoded_duration = 0
-    actual_fps = RECORD_FPS
+    actual_fps = 0.0
     last_gray_shape = None
     feed_scale = 1.0
     feed_x_offset = 0
@@ -1258,33 +1257,7 @@ def main():
                         gamma_enabled = cam.set_gamma_enabled(gamma_enabled)
                     print(f"Gamma enabled: {gamma_enabled}")
                                 
-            # ---------- FPS CHANGE KEYS ----------
-            new_fps = None
-
-            if key == ord('1'):
-                new_fps = 10.0
-            elif key == ord('2'):
-                new_fps = 20.0
-            elif key == ord('3'):
-                # always go to MAX supported fps
-                if hasattr(cam, "cam") and hasattr(cam.cam, "AcquisitionFrameRate"):
-                    new_fps = cam.cam.AcquisitionFrameRate.GetMax()
-                else:
-                    new_fps = 23.0
-
-            if new_fps is not None:
-                if hasattr(cam, "cam") and hasattr(cam.cam, "AcquisitionFrameRate"):
-                    try:
-                        max_fps = cam.cam.AcquisitionFrameRate.GetMax()
-                        new_fps = min(new_fps, max_fps)
-
-                        cam.cam.AcquisitionFrameRate.SetValue(new_fps)
-
-                        resulting = cam.cam.AcquisitionResultingFrameRate.GetValue()
-                        print(f"🔁 FPS changed → Locked: {new_fps:.2f} | Resulting: {resulting:.2f}")
-
-                    except Exception as e:
-                        print("⚠️ Failed to change FPS:", e)
+            
 
             
             
