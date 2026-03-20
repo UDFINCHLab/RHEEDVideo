@@ -59,6 +59,9 @@ rheed_videos/
 third_party/
 *.whl
 
+!third_party/
+!third_party/spinnaker_python-4.2.0.88-cp310-cp310-win_amd64.whl
+
 # ---------------------------
 # Build / packaging
 # ---------------------------
