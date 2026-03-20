@@ -20,7 +20,7 @@ EXPOSURE_CYCLE = [5000.0, 15000.0, 45000.0]  # microseconds
 GAIN_CONSTANT = 17.5  # fixed gain
 
 merge_mertens = cv2.createMergeMertens(
-    contrast_weight=1,
+    contrast_weight=0,
     saturation_weight=0,
     exposure_weight=1
 )
@@ -494,8 +494,8 @@ def main():
             if hasattr(cam, "set_exposure_us"):
                 cam.set_exposure_us(current_exposure)
 
-            # Discard more frames for longer exposures (sensor needs more time to settle)
-            discard_count = 1 if current_exposure <= 15000 else 2
+            # Use old anti-strobing exposure-settle logic
+            discard_count = 3
             for _ in range(discard_count):
                 cam.get_frame()
 
@@ -527,48 +527,29 @@ def main():
             triplet_counter += 1
 
             # ---- Fuse ----
-            # ---- Fuse (Exposure compensated HDR) ----
+
             imgs = []
 
-            for img in hdr_buffer:
-
-                # No exposure compensation — let Mertens select
-                # best-exposed pixels naturally from each frame
+            for img, exp in zip(hdr_buffer, cycle):
                 img_f = img.astype(np.float32) / 255.0
-                imgs.append(img_f)
+
+                # Old anti-strobing logic: compensate by exposure before fusion
+                img_f = img_f / (exp / max(cycle))
+
+                imgs.append(np.clip(img_f, 0, 1))
 
             # Merge exposures
             fused = merge_mertens.process(imgs)
 
-            # Normalize then stabilize range to reduce flicker
-            fused_min = float(fused.min())
-            fused_max = float(fused.max())
-            if fused_max - fused_min < 1e-6:
-                fused_max = fused_min + 1e-6
+            # Old anti-strobing logic: normalize each fused triplet to full display range
+            fused = cv2.normalize(fused, None, 0, 255, cv2.NORM_MINMAX)
+            fused_8 = fused.astype(np.uint8)
 
-            if not hasattr(capture_loop, "stable_min"):
-                capture_loop.stable_min = fused_min
-                capture_loop.stable_max = fused_max
-
-            # Detect sudden range shift (e.g. gain change) and snap faster
-            range_shift = abs(fused_max - capture_loop.stable_max)
-            adapt = 0.4 if range_shift > 0.05 else 0.1
-
-            capture_loop.stable_min = (1 - adapt) * capture_loop.stable_min + adapt * fused_min
-            capture_loop.stable_max = (1 - adapt) * capture_loop.stable_max + adapt * fused_max
-
-            fused_8 = np.clip(
-                (fused - capture_loop.stable_min) /
-                (capture_loop.stable_max - capture_loop.stable_min) * 255.0,
-                0, 255
-            ).astype(np.uint8)
-
-
-            # ---- Temporal HDR stabilization ----
+            # Old anti-strobing logic: strong temporal smoothing
             if not hasattr(capture_loop, "prev_hdr"):
                 capture_loop.prev_hdr = fused_8
 
-            alpha = 0.3  # reduced smoothing — preserves real signal changes
+            alpha = 0.7
 
             fused_8 = cv2.addWeighted(
                 capture_loop.prev_hdr,
@@ -580,8 +561,7 @@ def main():
 
             capture_loop.prev_hdr = fused_8
 
-
-            output_frame = fused_8                      
+            output_frame = fused_8            
 
             # ---- SAVE ONLY ONE TRIPLET ----
             # ---- SAVE ONLY ONE TRIPLET ----
