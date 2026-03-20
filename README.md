@@ -96,7 +96,7 @@ This makes the repository useful for:
 
 
 
-```markdown
+```
 ## 🖼 Example Dashboards and Analysis Views
 
 ### Standard Live Feed (`main.py`)
