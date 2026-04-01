@@ -6,6 +6,7 @@ import time
 import datetime
 import threading
 import queue
+import traceback
 from threading import Lock
 from camera import Camera
 from dummy_camera import DummyCamera
@@ -198,9 +199,8 @@ def main():
     
     
     
-    # Buffer of frames between acquisition and processing.
-    # 600 frames ≈ 20 seconds at 30 fps. Increase if you have RAM.
-    frame_q = queue.Queue(maxsize=1000)
+    
+    frame_q = queue.Queue(maxsize=2)
 
 
     # camera
@@ -309,9 +309,7 @@ def main():
 
     # ML capture state only (process removed)
     ml_capture = False
-    ml_writer_raw = None
     ml_writer_color = None
-    raw_file = None
     color_file = None
     ml_frame_count = 0
     ml_toggle_request = False
@@ -416,146 +414,145 @@ def main():
         # ---------------- WORKER THREAD ----------------
     def capture_loop():
         """Fast acquisition + immediate recording."""
-        nonlocal ml_capture, ml_writer_raw, ml_writer_color, ml_frame_count
+        nonlocal ml_capture, ml_writer_color, ml_frame_count
         nonlocal capture_counter, capture_timer, capture_fps
 
         while not stop_event.is_set():
-            frame = cam.get_frame()
-            if frame is None:
-                continue
-
-            # -------- Measure real acquisition FPS --------
-            capture_counter += 1
-            if time.time() - capture_timer >= 1.0:
-                capture_fps = capture_counter
-                capture_counter = 0
-                capture_timer = time.time()
-
-            
-
-            now = time.time() - t0
-
-
             try:
-                frame_q.put_nowait((frame, now))
-            except queue.Full:
-                pass  # drop frame for processing, but recording already done
+                frame = cam.get_frame()
+                if frame is None:
+                    continue
 
+                capture_counter += 1
+                if time.time() - capture_timer >= 1.0:
+                    capture_fps = capture_counter
+                    capture_counter = 0
+                    capture_timer = time.time()
+
+                now = time.time() - t0
+
+                try:
+                    frame_q.put_nowait((frame, now))
+                except queue.Full:
+                    try:
+                        frame_q.get_nowait()
+                    except queue.Empty:
+                        pass
+                    try:
+                        frame_q.put_nowait((frame, now))
+                    except queue.Full:
+                        pass
+
+            except Exception as e:
+                print("capture_loop error:", e)
+                traceback.print_exc()
+                time.sleep(0.05)
 
     def process_loop():
         """All heavier work happens here: ROI, overlays, logging, recording, UI buffers."""
         nonlocal frame_idx, total_logged_rows
         nonlocal latest_gray, latest_disp, latest_now, latest_frame_idx
-        nonlocal ml_capture, ml_writer_raw, ml_writer_color, ml_frame_count, last_gray_shape
+        nonlocal ml_capture, ml_writer_color, ml_frame_count, last_gray_shape
 
         while not stop_event.is_set():
             try:
-                frame, now = frame_q.get(timeout=0.2)
-            except queue.Empty:
-                continue
+                try:
+                    frame, now = frame_q.get(timeout=0.2)
+                except queue.Empty:
+                    continue
 
-            gray = frame if frame.ndim == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            last_gray_shape = gray.shape[:2]
+                while True:
+                    try:
+                        frame, now = frame_q.get_nowait()
+                    except queue.Empty:
+                        break
 
-            with roi_lock:
-                roi.update_intensities(gray, now)
-                video_frame = ml_frame_count if ml_capture else "NaN"
+                gray = frame if frame.ndim == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                last_gray_shape = gray.shape[:2]
 
-                for rid, r in roi.rois.items():
-                    if len(r["t"]) == 0:
-                        continue
-
-                    mean_int = r.get("last_raw_mean", 0.0)
-                    sum_int = r.get("last_sum", 0.0)
-                    area = r.get("last_area", 0)
-
-                    cx, cy = r["center"]
-                    rx, ry = r["rx"], r["ry"]
-                    shape = r["shape"]
-
-                    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-                    camera_time = f"{now:.6f}"
-
+                with roi_lock:
+                    roi.update_intensities(gray, now)
                     video_frame = ml_frame_count if ml_capture else "NaN"
 
-                    log_buffer.append(
-                        f"{frame_idx+1},{timestamp},{camera_time},{video_frame},{r.get('uuid','NA')},{rid},"
-                        f"{mean_int:.6f},{sum_int},{area},{cx},{cy},{rx},{ry},{shape}\n"
-                    )
-                    total_logged_rows += 1
+                    for rid, r in roi.rois.items():
+                        if len(r["t"]) == 0:
+                            continue
 
-                if line_manager.pt1 and line_manager.pt2:
-                    line_manager.extract_profile(gray, now)
+                        mean_int = r.get("last_raw_mean", 0.0)
+                        sum_int = r.get("last_sum", 0.0)
+                        area = r.get("last_area", 0)
 
-            disp = apply_gradient(gray, strength=strength) \
-                if gradient else cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-                
-            # 🔴 RECORD AFTER PROCESSING
-            if ml_capture:
+                        cx, cy = r["center"]
+                        rx, ry = r["rx"], r["ry"]
+                        shape = r["shape"]
 
-                try:
+                        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+                        camera_time = f"{now:.6f}"
 
-                    # Ensure RAW frame is correct
-                    raw_frame = gray
+                        video_frame = ml_frame_count if ml_capture else "NaN"
 
-                    if raw_frame.ndim == 3:
-                        raw_frame = cv2.cvtColor(raw_frame, cv2.COLOR_BGR2GRAY)
+                        log_buffer.append(
+                            f"{frame_idx+1},{timestamp},{camera_time},{video_frame},{r.get('uuid','NA')},{rid},"
+                            f"{mean_int:.6f},{sum_int},{area},{cx},{cy},{rx},{ry},{shape}\n"
+                        )
+                        total_logged_rows += 1
 
-                    raw_frame = raw_frame.astype(np.uint8)
+                    if line_manager.pt1 and line_manager.pt2:
+                        line_manager.extract_profile(gray, now)
 
-                    # Ensure COLOR frame is correct
-                    color_frame = disp
+                disp = apply_gradient(gray, strength=strength) \
+                    if gradient else cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
-                    if color_frame.ndim == 2:
-                        color_frame = cv2.cvtColor(color_frame, cv2.COLOR_GRAY2BGR)
+                if ml_capture:
+                    try:
+                        color_frame = disp
 
-                    color_frame = color_frame.astype(np.uint8)
+                        if color_frame.ndim == 2:
+                            color_frame = cv2.cvtColor(color_frame, cv2.COLOR_GRAY2BGR)
 
-                    frame_written = False
+                        color_frame = color_frame.astype(np.uint8)
 
-                    if ml_writer_raw is not None and ml_writer_raw.isOpened():
-                        ml_writer_raw.write(raw_frame)
-                        frame_written = True
+                        if ml_writer_color is not None and ml_writer_color.isOpened():
+                            ml_writer_color.write(color_frame)
+                            ml_frame_count += 1
 
-                    if ml_writer_color is not None and ml_writer_color.isOpened():
-                        ml_writer_color.write(color_frame)
-                        frame_written = True
+                    except Exception as e:
+                        print("Video write warning:", e)
 
-                    if frame_written:
-                        ml_frame_count += 1
+                with roi_lock:
+                    roi.draw_overlays(disp)
+                    line_manager.draw_overlay(disp)
 
-                except Exception as e:
-                    print("Video write warning:", e)
+                with frame_lock:
+                    frame_idx += 1
+                    latest_gray = gray
+                    latest_disp = disp
+                    latest_now = now
+                    latest_frame_idx = frame_idx
 
-            with roi_lock:
-                roi.draw_overlays(disp)
-                line_manager.draw_overlay(disp)
+                if time.time() - last_flush_time[0] > flush_interval:
+                    with log_lock:
+                        if log_buffer:
+                            with open(csv_filename, "a") as f:
+                                f.writelines(log_buffer)
+                            log_buffer.clear()
+                            last_flush_time[0] = time.time()
 
-            with frame_lock:
-                frame_idx += 1
-                latest_gray = gray
-                latest_disp = disp
-                latest_now = now
-                latest_frame_idx = frame_idx
+            except Exception as e:
+                print("process_loop error:", e)
+                traceback.print_exc()
+                time.sleep(0.05)
 
-            # Flush CSV occasionally
-            if time.time() - last_flush_time[0] > flush_interval:
-                with log_lock:
-                    if log_buffer:
-                        with open(csv_filename, "a") as f:
-                            f.writelines(log_buffer)
-                        log_buffer.clear()
-                        last_flush_time[0] = time.time()
-            
+
     cap_thread = threading.Thread(target=capture_loop, daemon=True)
     proc_thread = threading.Thread(target=process_loop, daemon=True)
 
     cap_thread.start()
     proc_thread.start()
-    print("Frame grabbed")        
-    
+    print("Frame grabbed")
+
     try:
-        while True:
+        while True:       
             with frame_lock:
                 if latest_disp is None or latest_gray is None:
                     time.sleep(0.005)
@@ -565,11 +562,8 @@ def main():
                 gray = latest_gray
                 now = latest_now
                 frame_idx = latest_frame_idx
-            
-        
 
-
-                        # -------- Camera settings overlay --------
+            # -------- Camera settings overlay --------
             hw = getattr(cam, "has_hw_control", False)
             overlay = [
                 f"Live Feed: {'YES' if hw else 'NO (Dummy)'}",
@@ -700,17 +694,8 @@ def main():
                     inside = (cx - rx <= fx <= cx + rx) and (cy - ry <= fy <= cy + ry)
 
                 if inside:
-                    mask = np.zeros_like(gray, dtype=np.uint8)
 
-                    if r["shape"] == "ellipse":
-                        cv2.ellipse(mask, (cx, cy), (rx, ry), 0, 0, 360, 255, -1)
-                    else:
-                        cv2.rectangle(mask,
-                                    (cx - rx, cy - ry),
-                                    (cx + rx, cy + ry),
-                                    255, -1)
-
-                    sum_int = int(np.sum(gray[mask == 255]))
+                    sum_int = int(r.get("last_sum", 0))
                     hover_feed_info = (rid, sum_int, mouse_x, mouse_y)
                     break
                         
@@ -1044,26 +1029,17 @@ def main():
 
                         final_output_path.mkdir(parents=True, exist_ok=True)
 
-                        raw_dir = final_output_path / "raw"
-                        color_dir = final_output_path / "color"
-
-                        raw_dir.mkdir(parents=True, exist_ok=True)
-                        color_dir.mkdir(parents=True, exist_ok=True)
-
-                        raw_file = raw_dir / f"RHEED_video_{timestamp.strftime('%m-%d-%y_%H-%M-%S')}_raw.avi"
-                        color_file = color_dir / f"RHEED_video_{timestamp.strftime('%m-%d-%y_%H-%M-%S')}_color.avi"
+                        color_file = final_output_path / f"RHEED_video_{timestamp.strftime('%m-%d-%y_%H-%M-%S')}_color.avi"
 
                         h, w = last_gray_shape
                         fourcc = cv2.VideoWriter_fourcc(*"XVID")
 
                         actual_fps = max(1.0, float(capture_fps)) if capture_fps > 0 else 30.0
 
-                        ml_writer_raw = cv2.VideoWriter(str(raw_file), fourcc, actual_fps, (w, h), False)
                         ml_writer_color = cv2.VideoWriter(str(color_file), fourcc, actual_fps, (w, h), True)
 
-                        if not ml_writer_raw.isOpened() or not ml_writer_color.isOpened():
+                        if not ml_writer_color.isOpened():
                             print("❌ Failed to open VideoWriter for ML capture.")
-                            ml_writer_raw = None
                             ml_writer_color = None
                         else:
                             ml_capture = True
@@ -1071,13 +1047,9 @@ def main():
                             ml_frame_count = 0
 
                             print(f"📥 ML capture STARTED")
-                            print(f"   RAW   → {raw_file}")
                             print(f"   COLOR → {color_file}")
                 else:
                     # stop capture (NO ML PROCESSING)
-                    if ml_writer_raw is not None:
-                        ml_writer_raw.release()
-
                     if ml_writer_color is not None:
                         ml_writer_color.release()
 
@@ -1086,18 +1058,15 @@ def main():
                         effective_fps = ml_frame_count / record_duration if record_duration > 0 else 0
 
                         print("\n📤 ML capture STOPPED")
-                        print(f"   RAW   → {raw_file}")
                         print(f"   COLOR → {color_file}")
                         print(f"   ⏱ Real recording time: {record_duration:.2f} sec")
                         print(f"   🎞 Frames written: {ml_frame_count}")
                         print(f"   📊 Effective FPS: {effective_fps:.2f}")
                         print(f"   📁 Encoded video duration: {encoded_duration:.2f} sec\n")
 
-                    ml_writer_raw = None
                     ml_writer_color = None
                     ml_capture = False
                     ml_frame_count = 0
-                    raw_file = None
                     color_file = None
 
     finally:
@@ -1108,15 +1077,11 @@ def main():
         except:
             pass
         
-        if ml_writer_raw is not None:
-            ml_writer_raw.release()
-
         if ml_writer_color is not None:
             ml_writer_color.release()
 
-        if raw_file is not None:
+        if color_file is not None:
             print("\n📤 ML capture STOPPED")
-            print(f"   RAW   → {raw_file}")
             print(f"   COLOR → {color_file}")
             
             

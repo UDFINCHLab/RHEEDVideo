@@ -168,6 +168,8 @@ class ROIManager:
     # ---------- intensity ----------
     def update_intensities(self, frame_gray, timestamp_s):
         for roi in self.rois.values():
+            
+        
             mask = np.zeros_like(frame_gray, dtype=np.uint8)
             cx, cy = roi["center"]
 
@@ -183,17 +185,15 @@ class ROIManager:
 
             raw_mean = cv2.mean(frame_gray, mask=mask)[0]
 
-            moving_avg_window = 15
-            summands = list(roi["y"])[-moving_avg_window:]
-            moving_avg = (raw_mean + np.sum(summands)) / (len(summands) + 1)
-
             roi["t"].append(timestamp_s)
-            roi["y"].append(moving_avg)
+            roi["y"].append(float(raw_mean))
 
             # NEW: store raw + sum + area for logging
             roi["last_raw_mean"] = float(raw_mean)
             roi["last_sum"] = float(np.sum(frame_gray[mask == 255]))
             roi["last_area"] = int(np.sum(mask == 255))
+
+
 
     # ---------- overlay ----------
     def draw_overlays(self, frame_bgr):

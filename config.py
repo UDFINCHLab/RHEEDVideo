@@ -1,8 +1,8 @@
 from pathlib import Path
 
-BASE_DIR = Path.cwd()
+BASE_DIR = Path(r"C:\Users\ComesLab\Documents\DATA\RHEED")
 
-ROI_OUTPUT_DIR = BASE_DIR / "roi_data"
+ROI_OUTPUT_DIR = BASE_DIR
 VIDEO_OUTPUT_DIR = BASE_DIR / "rheed_videos"
 
 

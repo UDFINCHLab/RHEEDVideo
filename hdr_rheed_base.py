@@ -6,6 +6,7 @@ import time
 import datetime
 import threading
 import queue
+import traceback
 from threading import Lock
 from camera import Camera
 from dummy_camera import DummyCamera
@@ -216,7 +217,7 @@ def main():
     
     # Buffer of frames between acquisition and processing.
     # 600 frames ≈ 20 seconds at 30 fps. Increase if you have RAM.
-    frame_q = queue.Queue(maxsize=1800)
+    frame_q = queue.Queue(maxsize=2)
 
 
     # camera
@@ -338,9 +339,7 @@ def main():
 
     # ML capture state only (process removed)
     ml_capture = False
-    ml_writer_raw = None
     ml_writer_color = None
-    raw_file = None
     color_file = None
     ml_frame_count = 0
     ml_toggle_request = False
@@ -445,7 +444,7 @@ def main():
         # ---------------- WORKER THREAD ----------------
     def capture_loop():
         """Acquisition loop supporting RAW and HDR fusion."""
-        nonlocal ml_capture, ml_writer_raw, ml_writer_color, ml_frame_count, hdr_cycle_dirty
+        nonlocal ml_capture, ml_writer_color, ml_frame_count, hdr_cycle_dirty
             
 
         exposure_index = 0
@@ -461,279 +460,288 @@ def main():
         last_gain = GAIN_CONSTANT
 
         while not stop_event.is_set():
-            # If user changed HDR exposures, restart the triplet cleanly
-            if hdr_cycle_dirty:
+            try:
+                # If user changed HDR exposures, restart the triplet cleanly
+                if hdr_cycle_dirty:
 
-                cycle = EXPOSURE_CYCLE.copy()
-                hdr_buffer.clear()
-                exposure_index = 0
+                    cycle = EXPOSURE_CYCLE.copy()
+                    hdr_buffer.clear()
+                    exposure_index = 0
 
-                # Re-apply current gain after cycle reset
-                if hasattr(cam, "set_gain_db"):
-                    cam.set_gain_db(GAIN_CONSTANT)
+                    # Re-apply current gain after cycle reset
+                    if hasattr(cam, "set_gain_db"):
+                        cam.set_gain_db(GAIN_CONSTANT)
 
-                # Flush camera pipeline (remove old exposure frames)
-                for _ in range(6):
+                    # Flush camera pipeline (remove old exposure frames)
+                    for _ in range(6):
+                        cam.get_frame()
+
+                    # Clear queued frames waiting for processing
+                    try:
+                        while True:
+                            frame_q.get_nowait()
+                    except queue.Empty:
+                        pass
+
+                    hdr_cycle_dirty = False
+                    continue
+
+                # Cycle HDR exposures
+                # ---------- HDR Exposure Capture ----------
+                current_exposure = cycle[exposure_index]
+
+                if hasattr(cam, "set_exposure_us"):
+                    cam.set_exposure_us(current_exposure)
+
+                # Use old anti-strobing exposure-settle logic
+                discard_count = 3
+                for _ in range(discard_count):
                     cam.get_frame()
 
-                # Clear queued frames waiting for processing
-                try:
-                    while True:
-                        frame_q.get_nowait()
-                except queue.Empty:
-                    pass
+                frame = cam.get_frame()
+                
+                if frame is None:
+                    continue
 
-                hdr_cycle_dirty = False
-                continue
+                now = time.time() - t0
 
-            # Cycle HDR exposures
-            # ---------- HDR Exposure Capture ----------
-            current_exposure = cycle[exposure_index]
-
-            if hasattr(cam, "set_exposure_us"):
-                cam.set_exposure_us(current_exposure)
-
-            # Use old anti-strobing exposure-settle logic
-            discard_count = 3
-            for _ in range(discard_count):
-                cam.get_frame()
-
-            frame = cam.get_frame()
-            
-            if frame is None:
-                continue
-
-            now = time.time() - t0
-
-            # convert safely to uint8
-            if frame.dtype != np.uint8:
-                frame = cv2.normalize(frame, None, 0, 255, cv2.NORM_MINMAX)
-                frame = frame.astype(np.uint8)
+                # convert safely to uint8
+                if frame.dtype != np.uint8:
+                    frame = cv2.normalize(frame, None, 0, 255, cv2.NORM_MINMAX)
+                    frame = frame.astype(np.uint8)
 
 
-            frame = cv2.resize(frame, None, fx=0.75, fy=0.75, interpolation=cv2.INTER_AREA)
-            hdr_buffer.append(frame)
+                frame = cv2.resize(frame, None, fx=0.75, fy=0.75, interpolation=cv2.INTER_AREA)
+                hdr_buffer.append(frame)
 
-            # downscale for HDR fusion speed
-            
+                # downscale for HDR fusion speed
+                
 
-            exposure_index = (exposure_index + 1) % len(cycle)
+                exposure_index = (exposure_index + 1) % len(cycle)
 
-            # wait until we have a full HDR triplet
-            if len(hdr_buffer) < len(cycle):
-                continue
+                # wait until we have a full HDR triplet
+                if len(hdr_buffer) < len(cycle):
+                    continue
 
-            triplet_counter += 1
+                triplet_counter += 1
 
-            # ---- Fuse ----
+                # ---- Fuse ----
 
-            imgs = []
+                imgs = []
 
-            for img, exp in zip(hdr_buffer, cycle):
-                img_f = img.astype(np.float32) / 255.0
+                for img, exp in zip(hdr_buffer, cycle):
+                    img_f = img.astype(np.float32) / 255.0
 
-                # Old anti-strobing logic: compensate by exposure before fusion
-                img_f = img_f / (exp / max(cycle))
+                    # Old anti-strobing logic: compensate by exposure before fusion
+                    img_f = img_f / (exp / max(cycle))
 
-                imgs.append(np.clip(img_f, 0, 1))
+                    imgs.append(np.clip(img_f, 0, 1))
 
-            # Merge exposures
-            fused = merge_mertens.process(imgs)
+                # Merge exposures
+                fused = merge_mertens.process(imgs)
 
-            # Old anti-strobing logic: normalize each fused triplet to full display range
-            fused = cv2.normalize(fused, None, 0, 255, cv2.NORM_MINMAX)
-            fused_8 = fused.astype(np.uint8)
+                # Old anti-strobing logic: normalize each fused triplet to full display range
+                fused = cv2.normalize(fused, None, 0, 255, cv2.NORM_MINMAX)
+                fused_8 = fused.astype(np.uint8)
 
-            # Old anti-strobing logic: strong temporal smoothing
-            if not hasattr(capture_loop, "prev_hdr"):
+                # Old anti-strobing logic: strong temporal smoothing
+                if not hasattr(capture_loop, "prev_hdr"):
+                    capture_loop.prev_hdr = fused_8
+
+                alpha = 0.7
+
+                fused_8 = cv2.addWeighted(
+                    capture_loop.prev_hdr,
+                    alpha,
+                    fused_8,
+                    1 - alpha,
+                    0
+                )
+
                 capture_loop.prev_hdr = fused_8
 
-            alpha = 0.7
+                output_frame = fused_8            
 
-            fused_8 = cv2.addWeighted(
-                capture_loop.prev_hdr,
-                alpha,
-                fused_8,
-                1 - alpha,
-                0
-            )
+                # ---- SAVE ONLY ONE TRIPLET ----
+                # ---- SAVE ONLY ONE TRIPLET ----
+                if SAVE_ONE_TRIPLET and not triplet_saved and triplet_counter > 10:
 
-            capture_loop.prev_hdr = fused_8
+                    triplet_dir = Path(__file__).resolve().parent / "hdr_exposure_triplet"
+                    triplet_dir.mkdir(exist_ok=True)
 
-            output_frame = fused_8            
+                    raw_triplet_dir = triplet_dir / "raw_sensor"
+                    raw_triplet_dir.mkdir(exist_ok=True)
 
-            # ---- SAVE ONLY ONE TRIPLET ----
-            # ---- SAVE ONLY ONE TRIPLET ----
-            if SAVE_ONE_TRIPLET and not triplet_saved and triplet_counter > 10:
+                    e1, e2, e3 = [int(x) for x in cycle]
 
-                triplet_dir = Path(__file__).resolve().parent / "hdr_exposure_triplet"
-                triplet_dir.mkdir(exist_ok=True)
+                    # Remove old color files
+                    for fname in [f"exp_{e1}us.png", f"exp_{e2}us.png",
+                                f"exp_{e3}us.png", "fused_hdr.png"]:
+                        p = triplet_dir / fname
+                        if p.exists():
+                            p.unlink()
 
-                raw_triplet_dir = triplet_dir / "raw_sensor"
-                raw_triplet_dir.mkdir(exist_ok=True)
+                    # Remove old raw sensor files
+                    for fname in [f"raw_{e1}us.png", f"raw_{e2}us.png", f"raw_{e3}us.png"]:
+                        p = raw_triplet_dir / fname
+                        if p.exists():
+                            p.unlink()
 
-                e1, e2, e3 = [int(x) for x in cycle]
+                    # Save true raw sensor frames (grayscale, no LUT)
+                    cv2.imwrite(str(raw_triplet_dir / f"raw_{e1}us.png"), hdr_buffer[0])
+                    cv2.imwrite(str(raw_triplet_dir / f"raw_{e2}us.png"), hdr_buffer[1])
+                    cv2.imwrite(str(raw_triplet_dir / f"raw_{e3}us.png"), hdr_buffer[2])
 
-                # Remove old color files
-                for fname in [f"exp_{e1}us.png", f"exp_{e2}us.png",
-                               f"exp_{e3}us.png", "fused_hdr.png"]:
-                    p = triplet_dir / fname
-                    if p.exists():
-                        p.unlink()
+                    # Save color LUT versions
+                    exp1_color = apply_gradient(hdr_buffer[0], strength=strength)
+                    exp2_color = apply_gradient(hdr_buffer[1], strength=strength)
+                    exp3_color = apply_gradient(hdr_buffer[2], strength=strength)
 
-                # Remove old raw sensor files
-                for fname in [f"raw_{e1}us.png", f"raw_{e2}us.png", f"raw_{e3}us.png"]:
-                    p = raw_triplet_dir / fname
-                    if p.exists():
-                        p.unlink()
+                    cv2.imwrite(str(triplet_dir / f"exp_{e1}us.png"), exp1_color)
+                    cv2.imwrite(str(triplet_dir / f"exp_{e2}us.png"), exp2_color)
+                    cv2.imwrite(str(triplet_dir / f"exp_{e3}us.png"), exp3_color)
 
-                # Save true raw sensor frames (grayscale, no LUT)
-                cv2.imwrite(str(raw_triplet_dir / f"raw_{e1}us.png"), hdr_buffer[0])
-                cv2.imwrite(str(raw_triplet_dir / f"raw_{e2}us.png"), hdr_buffer[1])
-                cv2.imwrite(str(raw_triplet_dir / f"raw_{e3}us.png"), hdr_buffer[2])
+                    # Save fused with gradient (COLOR)
+                    fused_color = apply_gradient(fused_8, strength=strength)
+                    cv2.imwrite(str(triplet_dir / "fused_hdr.png"), fused_color)
 
-                # Save color LUT versions
-                exp1_color = apply_gradient(hdr_buffer[0], strength=strength)
-                exp2_color = apply_gradient(hdr_buffer[1], strength=strength)
-                exp3_color = apply_gradient(hdr_buffer[2], strength=strength)
+                    # Save fused raw grayscale too
+                    cv2.imwrite(str(raw_triplet_dir / "fused_hdr_raw.png"), fused_8)
 
-                cv2.imwrite(str(triplet_dir / f"exp_{e1}us.png"), exp1_color)
-                cv2.imwrite(str(triplet_dir / f"exp_{e2}us.png"), exp2_color)
-                cv2.imwrite(str(triplet_dir / f"exp_{e3}us.png"), exp3_color)
+                    print("✅ Saved ONE HDR triplet")
+                    print(f"   Color LUT → hdr_exposure_triplet/")
+                    print(f"   Raw sensor → hdr_exposure_triplet/raw_sensor/")
+                    triplet_saved = True
+                    
+                hdr_buffer.clear()                
 
-                # Save fused with gradient (COLOR)
-                fused_color = apply_gradient(fused_8, strength=strength)
-                cv2.imwrite(str(triplet_dir / "fused_hdr.png"), fused_color)
+                # ---------------- Recording ----------------
+                if ml_capture:
+                    try:
+                        color_frame = apply_gradient(fused_8, strength=strength)
+                        color_frame = color_frame.astype(np.uint8)
 
-                # Save fused raw grayscale too
-                cv2.imwrite(str(raw_triplet_dir / "fused_hdr_raw.png"), fused_8)
+                        expected_h, expected_w = last_gray_shape if last_gray_shape else fused_8.shape[:2]
 
-                print("✅ Saved ONE HDR triplet")
-                print(f"   Color LUT → hdr_exposure_triplet/")
-                print(f"   Raw sensor → hdr_exposure_triplet/raw_sensor/")
-                triplet_saved = True
-                
-            hdr_buffer.clear()                
+                        if ml_writer_color is not None and ml_writer_color.isOpened():
+                            if color_frame.shape[0] == expected_h and color_frame.shape[1] == expected_w:
+                                ml_writer_color.write(color_frame)
+                                ml_frame_count += 1
 
-            # ---------------- Recording ----------------
-            if ml_capture:
+                    except Exception as e:
+                        print("Video write warning:", e)
+
                 try:
-                    # output_frame is already fused grayscale uint8
-                    raw_frame = fused_8.copy()
+                    frame_q.put_nowait((output_frame, now))
+                except queue.Full:
+                    try:
+                        frame_q.get_nowait()
+                    except queue.Empty:
+                        pass
+                    try:
+                        frame_q.put_nowait((output_frame, now))
+                    except queue.Full:
+                        pass
 
-                    color_frame = apply_gradient(raw_frame, strength=strength)
-                    color_frame = color_frame.astype(np.uint8)
-
-                    frame_written = False
-
-                    expected_h, expected_w = last_gray_shape if last_gray_shape else raw_frame.shape[:2]
-
-                    if ml_writer_raw is not None and ml_writer_raw.isOpened():
-                        if raw_frame.shape[0] == expected_h and raw_frame.shape[1] == expected_w:
-                            ml_writer_raw.write(raw_frame)
-                            frame_written = True
-
-                    if ml_writer_color is not None and ml_writer_color.isOpened():
-                        if color_frame.shape[0] == expected_h and color_frame.shape[1] == expected_w:
-                            ml_writer_color.write(color_frame)
-                            frame_written = True
-
-                    if frame_written:
-                        ml_frame_count += 1
-
-                except Exception as e:
-                    print("Video write warning:", e)
-
-            try:
-                frame_q.put_nowait((output_frame, now))
-            except queue.Full:
-                pass
+            except Exception as e:
+                print("capture_loop error:", e)
+                traceback.print_exc()
+                time.sleep(0.05)
 
 
     def process_loop():
         """All heavier work happens here: ROI, overlays, logging, recording, UI buffers."""
         nonlocal frame_idx, total_logged_rows
         nonlocal latest_gray, latest_disp, latest_now, latest_frame_idx
-        nonlocal ml_capture, ml_writer_raw, ml_writer_color, ml_frame_count, last_gray_shape
+        nonlocal ml_capture, ml_writer_color, ml_frame_count, last_gray_shape
         nonlocal hdr_frame_counter, hdr_fps, hdr_last_time
 
         while not stop_event.is_set():
-            # Apply gain if user changed it
             try:
-                frame, now = frame_q.get(timeout=0.2)
-            except queue.Empty:
-                continue
+                try:
+                    frame, now = frame_q.get(timeout=0.2)
+                except queue.Empty:
+                    continue
 
-            gray = frame if frame.ndim == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            last_gray_shape = gray.shape[:2]
+                while True:
+                    try:
+                        frame, now = frame_q.get_nowait()
+                    except queue.Empty:
+                        break
 
-            with roi_lock:
-                roi.update_intensities(gray, now)
+                gray = frame if frame.ndim == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                last_gray_shape = gray.shape[:2]
 
-                for rid, r in roi.rois.items():
-                    if len(r["t"]) == 0:
-                        continue
+                with roi_lock:
+                    roi.update_intensities(gray, now)
 
-                    mean_int = r.get("last_raw_mean", 0.0)
-                    sum_int = r.get("last_sum", 0.0)
-                    area = r.get("last_area", 0)
+                    for rid, r in roi.rois.items():
+                        if len(r["t"]) == 0:
+                            continue
 
-                    cx, cy = r["center"]
-                    rx, ry = r["rx"], r["ry"]
-                    shape = r["shape"]
+                        mean_int = r.get("last_raw_mean", 0.0)
+                        sum_int = r.get("last_sum", 0.0)
+                        area = r.get("last_area", 0)
 
-                    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-                    camera_time = f"{now:.6f}"
-                    video_frame = ml_frame_count if ml_capture else "NaN"
+                        cx, cy = r["center"]
+                        rx, ry = r["rx"], r["ry"]
+                        shape = r["shape"]
 
-                    log_buffer.append(
-                        f"{frame_idx+1},{timestamp},{camera_time},{video_frame},{r.get('uuid','NA')},{rid},"
-                        f"{mean_int:.6f},{sum_int},{area},{cx},{cy},{rx},{ry},{shape}\n"
-                    )
-                    
-                    total_logged_rows += 1
+                        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+                        camera_time = f"{now:.6f}"
+                        video_frame = ml_frame_count if ml_capture else "NaN"
 
-                if line_manager.pt1 and line_manager.pt2:
-                    line_manager.extract_profile(gray, now)
+                        log_buffer.append(
+                            f"{frame_idx+1},{timestamp},{camera_time},{video_frame},{r.get('uuid','NA')},{rid},"
+                            f"{mean_int:.6f},{sum_int},{area},{cx},{cy},{rx},{ry},{shape}\n"
+                        )
 
-            disp = apply_gradient(gray, strength=strength) \
-                if gradient else cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+                        total_logged_rows += 1
 
-            # Draw overlays on local disp copy — no lock needed
-            roi.draw_overlays(disp)
-            line_manager.draw_overlay(disp)
+                    if line_manager.pt1 and line_manager.pt2:
+                        line_manager.extract_profile(gray, now)
 
-            with frame_lock:
-                frame_idx += 1
-                latest_gray = gray
-                latest_disp = disp
-                latest_now = now
-                latest_frame_idx = frame_idx
+                disp = apply_gradient(gray, strength=strength) \
+                    if gradient else cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
-            # ---- HDR FPS measurement (outside lock) ----
-            hdr_frame_counter += 1
-            elapsed = time.time() - hdr_last_time
-            if elapsed >= 1.0:
-                hdr_fps = hdr_frame_counter / elapsed
-                hdr_frame_counter = 0
-                hdr_last_time = time.time()
+                roi.draw_overlays(disp)
+                line_manager.draw_overlay(disp)
 
-            # Flush CSV occasionally
-            if time.time() - last_flush_time[0] > flush_interval:
-                with log_lock:
-                    if log_buffer:
-                        with open(csv_filename, "a") as f:
-                            f.writelines(log_buffer)
-                        log_buffer.clear()
-                        last_flush_time[0] = time.time()
-            
+                with frame_lock:
+                    frame_idx += 1
+                    latest_gray = gray
+                    latest_disp = disp
+                    latest_now = now
+                    latest_frame_idx = frame_idx
+
+                hdr_frame_counter += 1
+                elapsed = time.time() - hdr_last_time
+                if elapsed >= 1.0:
+                    hdr_fps = hdr_frame_counter / elapsed
+                    hdr_frame_counter = 0
+                    hdr_last_time = time.time()
+
+                if time.time() - last_flush_time[0] > flush_interval:
+                    with log_lock:
+                        if log_buffer:
+                            with open(csv_filename, "a") as f:
+                                f.writelines(log_buffer)
+                            log_buffer.clear()
+                            last_flush_time[0] = time.time()
+
+            except Exception as e:
+                print("process_loop error:", e)
+                traceback.print_exc()
+                time.sleep(0.05)
+
+
     cap_thread = threading.Thread(target=capture_loop, daemon=True)
     proc_thread = threading.Thread(target=process_loop, daemon=True)
 
     cap_thread.start()
     proc_thread.start()
-    print("Frame grabbed")        
-    
+    print("Frame grabbed")
+
     try:
         while True:
             with frame_lock:
@@ -745,11 +753,12 @@ def main():
                 gray = latest_gray
                 now = latest_now
                 frame_idx = latest_frame_idx
+        
             
         
 
 
-                        # -------- Camera settings overlay --------
+                        
             # -------- Camera settings overlay --------
             hw = getattr(cam, "has_hw_control", False)
 
@@ -908,17 +917,7 @@ def main():
                     inside = (cx - rx <= fx <= cx + rx) and (cy - ry <= fy <= cy + ry)
 
                 if inside:
-                    mask = np.zeros_like(gray, dtype=np.uint8)
-
-                    if r["shape"] == "ellipse":
-                        cv2.ellipse(mask, (cx, cy), (rx, ry), 0, 0, 360, 255, -1)
-                    else:
-                        cv2.rectangle(mask,
-                                    (cx - rx, cy - ry),
-                                    (cx + rx, cy + ry),
-                                    255, -1)
-
-                    sum_int = int(np.sum(gray[mask == 255]))
+                    sum_int = int(r.get("last_sum", 0))
                     hover_feed_info = (rid, sum_int, mouse_x, mouse_y)
                     break
                         
@@ -1280,13 +1279,7 @@ def main():
 
                         final_output_path.mkdir(parents=True, exist_ok=True)
 
-                        raw_dir = final_output_path / "raw"
-                        color_dir = final_output_path / "color"
-                        raw_dir.mkdir(parents=True, exist_ok=True)
-                        color_dir.mkdir(parents=True, exist_ok=True)
-
-                        raw_file = raw_dir / f"RHEED_HDR_video_{timestamp.strftime('%m-%d-%y_%H-%M-%S')}_raw.avi"
-                        color_file = color_dir / f"RHEED_HDR_video_{timestamp.strftime('%m-%d-%y_%H-%M-%S')}_color.avi"
+                        color_file = final_output_path / f"RHEED_HDR_video_{timestamp.strftime('%m-%d-%y_%H-%M-%S')}_color.avi"
 
 
                         h, w = last_gray_shape
@@ -1295,25 +1288,19 @@ def main():
                         actual_fps = max(3.0, hdr_fps)
                         print(f"🎥 Recording using logical FPS: {actual_fps:.2f}")
 
-                        ml_writer_raw = cv2.VideoWriter(str(raw_file), fourcc, actual_fps, (w, h), False)
                         ml_writer_color = cv2.VideoWriter(str(color_file), fourcc, actual_fps, (w, h), True)
 
-                        if not ml_writer_raw.isOpened() or not ml_writer_color.isOpened():
+                        if not ml_writer_color.isOpened():
                             print("❌ Failed to open VideoWriter for ML capture.")
-                            ml_writer_raw = None
                             ml_writer_color = None
                         else:
                             ml_capture = True
                             ml_frame_count = 0
                             record_start_time = time.time()
                             print(f"📥 ML capture STARTED")
-                            print(f"   RAW   → {raw_file}")
                             print(f"   COLOR → {color_file}")
                 else:
                     # stop capture (NO ML PROCESSING)
-                    if ml_writer_raw is not None:
-                        ml_writer_raw.release()
-
                     if ml_writer_color is not None:
                         ml_writer_color.release()
 
@@ -1322,18 +1309,15 @@ def main():
                         effective_fps = ml_frame_count / record_duration if record_duration > 0 else 0
 
                         print(f"\n📤 ML capture STOPPED")
-                        print(f"   RAW   → {raw_file}")
                         print(f"   COLOR → {color_file}")
                         print(f"   ⏱ Real recording time: {record_duration:.2f} sec")
                         print(f"   🎞 Frames written: {ml_frame_count}")
                         print(f"   📊 Effective FPS: {effective_fps:.2f}")
                         print(f"   📁 Encoded video duration: {encoded_duration:.2f} sec\n")
 
-                    ml_writer_raw = None
                     ml_writer_color = None
                     ml_capture = False
                     ml_frame_count = 0
-                    raw_file = None
                     color_file = None
     finally:
         stop_event.set()
@@ -1343,15 +1327,11 @@ def main():
         except:
             pass
         
-        if ml_writer_raw is not None:
-            ml_writer_raw.release()
-
         if ml_writer_color is not None:
             ml_writer_color.release()
 
-        if raw_file is not None:
+        if color_file is not None:
             print(f"\n📤 ML capture STOPPED on exit.")
-            print(f"   RAW   → {raw_file}")
             print(f"   COLOR → {color_file}")
             print(f"   Saved {ml_frame_count} frames.")
             
