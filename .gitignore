@@ -85,3 +85,8 @@ dist/
 # ---------------------------
 .DS_Store
 Thumbs.db
+
+# ---------------------------
+# Local machine-specific config
+# ---------------------------
+config.py
