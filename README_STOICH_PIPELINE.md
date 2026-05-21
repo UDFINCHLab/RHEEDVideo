@@ -13,8 +13,9 @@ It was developed and validated on **CSO (CaSnO₃)** data. This guide shows you 
 4. [Path Configuration in Scripts](#4-path-configuration-in-scripts)
 5. [Running the Pipeline — Step by Step](#5-running-the-pipeline--step-by-step)
 6. [Adapting for a New Material](#6-adapting-for-a-new-material)
-7. [Output Files Reference](#7-output-files-reference)
-8. [Troubleshooting](#8-troubleshooting)
+7. [Predicting a New Video (No Retraining)](#7-predicting-a-new-video-no-retraining)
+8. [Output Files Reference](#8-output-files-reference)
+9. [Troubleshooting](#9-troubleshooting)
 
 ---
 
@@ -356,7 +357,57 @@ Everything else (folder structure, script logic, output paths) is the same.
 
 ---
 
-## 7. Output Files Reference
+## 7. Predicting a New Video (No Retraining)
+
+Once a material's pipeline has been fully run and models are saved, you can
+predict stoichiometry of any new video of the same material instantly —
+no labels required, no retraining.
+
+### When to use this
+
+| Situation | What to do |
+|---|---|
+| New CSO video, CSO pipeline already run | Use `predict_new_video.py` with `DATASET_NAME = "CSO"` |
+| New STO video, STO pipeline already run | Use `predict_new_video.py` with `DATASET_NAME = "STO"` |
+| Brand new material never seen before | Run full pipeline first, then use this script |
+
+### Setup — only 2 lines to change
+
+Open `ML/stoich_pca_pipeline/predict_new_video.py` and set:
+
+```python
+DATASET_NAME   = "CSO"                           # material the model was trained on
+NEW_VIDEO_PATH = r"C:\path\to\your\new_video.avi"  # full path to new video
+```
+
+### Run
+
+```powershell
+python ML/stoich_pca_pipeline/predict_new_video.py
+```
+
+### What it does automatically
+
+1. Reads crop coordinates from `global_crop_CSO.txt` — no manual crop needed
+2. Preprocesses the video exactly the same way as training
+3. Scans `loocv_summary_CSO.csv` and picks the fold with the lowest MAE as the best model
+4. Loads that model and runs inference on all frames
+5. Prints mean, median, std prediction to terminal
+6. Saves per-frame predictions CSV to:
+   `results/CSO/gated_cnn/new_video_predictions/prediction_<videoname>.csv`
+
+### Requirements
+
+Before using this script, make sure these files exist for your material
+(they are created automatically when you run the full pipeline):
+
+- `ML/stoich_pca_pipeline/global_crop_CSO.txt`
+- `results/CSO/gated_cnn/models/model_fold_*.pt`
+- `results/CSO/gated_cnn/loocv_summary_CSO.csv`
+
+---
+
+## 8. Output Files Reference
 
 | File | Location | Description |
 |---|---|---|
@@ -365,10 +416,11 @@ Everything else (folder structure, script logic, output paths) is the same.
 | `per_frame_features_CSO.csv` | `results/CSO/features/` | Per-frame cluster membership features |
 | `per_frame_predictions_CSO.csv` | `results/CSO/gated_cnn/` | CNN predictions per frame per fold |
 | `loocv_summary_CSO.csv` | `results/CSO/gated_cnn/` | MAE, RMSE, R² per LOOCV fold |
+| `prediction_<videoname>.csv` | `results/<MATERIAL>/gated_cnn/new_video_predictions/` | Per-frame predictions for a new video run through `predict_new_video.py` |
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 **`FileNotFoundError` on a video or labels file**  
 → Check that `DATASET_NAME` matches your folder name exactly (case-sensitive on Linux/Mac).
@@ -390,4 +442,4 @@ Everything else (folder structure, script logic, output paths) is the same.
 
 ---
 
-*Pipeline developed in the [Your Lab Name] lab. For questions, contact [your email].*
+*Pipeline developed in the Finch lab. For questions, contact bpathuri@udel.edu*
