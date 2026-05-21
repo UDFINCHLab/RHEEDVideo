@@ -90,3 +90,12 @@ Thumbs.db
 # Local machine-specific config
 # ---------------------------
 config.py
+
+# ---------------------------
+# Stoichiometry pipeline data
+# ---------------------------
+stoich_dataset/
+*.h5
+
+# Keep crop config files (used by batch_preprocess.py)
+!ML/stoich_pca_pipeline/global_crop_*.txt

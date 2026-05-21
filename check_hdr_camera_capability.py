@@ -1,3 +1,23 @@
+"""
+HDR camera capability diagnostic — check_hdr_camera_capability.py
+
+Standalone test script to verify that the connected FLIR Blackfly S camera
+supports all features required for the HDR RHEED pipeline before running
+the full dashboard.
+
+Checks performed:
+    - Camera model and serial number
+    - Auto-exposure and auto-gain can be disabled
+    - Pixel format can be set to Mono8
+    - FPS range and maximum sustainable frame rate
+    - Exposure range supports HDR triplet (5000 / 15000 / 45000 µs)
+    - Gain range supports 17.5 dB
+    - 3-second sustained stream test at max FPS
+    - Device link USB3 throughput
+
+Usage: Run directly with the camera connected before launching
+       hdr_rheed_base.py for the first time.
+"""
 import PySpin
 import numpy as np
 import time
@@ -6,12 +26,27 @@ import gc
 
 
 def print_line(title):
+    """Print a formatted section divider with a title for readable test output."""
     print("\n" + "=" * 60)
     print(title)
     print("=" * 60)
 
 
 def stream_test(cam, seconds=3.0, gain_db=17.5, exposure_us=12000.0):
+    """
+    Run a timed live acquisition test to measure sustained FPS and mean intensity.
+
+    Sets manual exposure and gain, acquires frames for the given duration,
+    then stops acquisition and returns summary statistics.
+
+    Args:
+        cam:          Initialized PySpin camera object
+        seconds:      Duration of the stream test in seconds
+        gain_db:      Gain to apply during the test (dB)
+        exposure_us:  Exposure time to apply during the test (microseconds)
+
+    Returns: (frame_count, sustained_fps, avg_intensity)
+    """
     cam.ExposureAuto.SetValue(PySpin.ExposureAuto_Off)
     cam.GainAuto.SetValue(PySpin.GainAuto_Off)
     cam.ExposureTime.SetValue(float(exposure_us))
@@ -44,6 +79,7 @@ def stream_test(cam, seconds=3.0, gain_db=17.5, exposure_us=12000.0):
 
 
 def main():
+    # ── Initialize PySpin and get first camera ─────────────────────────
     system = PySpin.System.GetInstance()
     cam_list = system.GetCameras()
 
@@ -57,6 +93,9 @@ def main():
     cam.Init()
 
     try:
+    # ── Run capability checks ──────────────────────────────────────────
+    # Each section tests one aspect of the camera required for HDR mode.
+    # A failure in any section means hdr_rheed_base.py may not work correctly.
         print_line("CAMERA BASIC INFO")
         print("Model:", cam.DeviceModelName.GetValue())
         print("Serial:", cam.DeviceSerialNumber.GetValue())
@@ -112,7 +151,11 @@ def main():
         print("Current Throughput:", throughput)
 
         print("\n✅ HDR Capability Test Complete.")
-
+        
+        
+    # ── Clean up all PySpin resources in correct order ─────────────────
+    # Camera must be deinitialized before clearing the camera list,
+    # and the list must be cleared before releasing the system instance.
     finally:
         try:
             cam.DeInit()

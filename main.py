@@ -1,3 +1,16 @@
+"""
+RHEED Live Monitoring Dashboard — main.py
+
+Real-time RHEED video acquisition and display using a FLIR Blackfly S camera.
+Runs three parallel threads (capture, processing, UI) to acquire frames,
+apply gradient colorization, track ROI intensities, and log data to CSV.
+Press 'M' to start/stop video recording for offline ML analysis.
+
+Dependencies: PySpin (camera SDK), OpenCV, NumPy
+Camera: FLIR Blackfly S via USB3 Vision
+Falls back to DummyCamera if no hardware is detected.
+"""
+
 import os
 import sys
 import cv2
@@ -19,6 +32,12 @@ from pathlib import Path
 
 # ---------------------- aspect ratio helper ----------------------
 def fit_to_window(frame, screen_w, screen_h):
+    """
+    Scale a frame to fill the full window while maintaining aspect ratio.
+    Centers the image on a black padded canvas sized to the window.
+
+    Returns: (padded_frame, scale_factor, x_offset, y_offset)
+    """
     h, w = frame.shape[:2]
 
     # ---- Guard against invalid window sizes ----
@@ -46,7 +65,14 @@ def fit_to_window(frame, screen_w, screen_h):
     return result, scale, x0, y0
 
 
+
 def fit_preserve_aspect(frame, target_w, target_h):
+    """
+    Scale a frame to fit within (target_w, target_h) without stretching.
+    Used to fit the live feed inside its panel before stacking with the footer.
+
+    Returns: (resized_frame, scale_factor, x_offset, y_offset)
+    """
     fh, fw = frame.shape[:2]
 
     scale = min(target_w / fw, target_h / fh)
@@ -67,7 +93,23 @@ def fit_preserve_aspect(frame, target_w, target_h):
 
 
 # ---------------------- chart rendering ----------------------
+
+
 def render_chart(roi, width, height, now_s, title, y_state):
+    """
+    Draw a real-time intensity vs. time waveform chart for a single ROI.
+    Uses exponential smoothing on the y-axis range to prevent jarring rescales.
+
+    Args:
+        roi:     ROI data dict containing 't' (time) and 'y' (intensity) lists
+        width:   Chart width in pixels
+        height:  Chart height in pixels
+        now_s:   Current elapsed time in seconds (unused directly, kept for API consistency)
+        title:   Label shown in the top-left corner of the chart
+        y_state: Persistent dict for smoothed y-axis min/max across frames
+
+    Returns: (chart_image, (n_points, elapsed_s, ymin, ymax))
+    """
     chart = np.full((height, width, 3), 255, np.uint8)
 
     ml, mr, mt, mb = 100, 20, 54, 44
@@ -147,7 +189,20 @@ def render_chart(roi, width, height, now_s, title, y_state):
 
 
 # ---------------------- gradient ----------------------
+
 def apply_gradient(frame, lut="rheed_gradient_lut.npy", strength=0.8):
+    """
+    Apply a custom color gradient LUT to a grayscale RHEED frame for visualization.
+    The LUT is loaded once and cached as a function attribute for performance.
+    Falls back to plain grayscale BGR if the LUT file is missing.
+
+    Args:
+        frame:    Input image — grayscale (2D) or BGR (3D) numpy array
+        lut:      Path to the .npy color lookup table file
+        strength: Blend weight between gray and colorized output (0.0–1.0)
+
+    Returns: BGR numpy array with gradient colorization applied
+    """
     if frame.ndim == 3:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     else:
@@ -179,6 +234,11 @@ def main():
     line_manager = LineManager()
     
     # ---------------- Threaded runtime state ----------------
+    # ── Thread synchronization primitives ─────────────────────────────
+    # stop_event: signals all threads to exit cleanly on shutdown
+    # roi_lock:   prevents race conditions when ROIs are drawn/moved/read
+    # frame_lock: protects the latest_gray / latest_disp shared buffers
+    # log_lock:   ensures CSV log_buffer is flushed safely from any thread
     stop_event = threading.Event()
 
     roi_lock = Lock()      # protects roi + line_manager mutations
@@ -199,11 +259,18 @@ def main():
     
     
     
-    
+    # ── Inter-thread frame queue ───────────────────────────────────────
+    # maxsize=2 keeps memory usage bounded — if processing falls behind,
+    # the oldest frame is dropped so the display always shows live data.
     frame_q = queue.Queue(maxsize=2)
 
 
     # camera
+    # ── Camera initialization ──────────────────────────────────────────
+    # Attempts to connect to the FLIR Blackfly S via PySpin.
+    # If no hardware is found, falls back to DummyCamera (synthetic frames).
+    # DeviceLinkThroughputLimit is raised to 120 MB/s if needed to prevent
+    # frame drops on USB3 connections.
     try:
         cam = Camera()
 
@@ -246,7 +313,11 @@ def main():
     gamma_min = float(s.get("gamma_min", 0.25))
     gamma_max = float(s.get("gamma_max", 4.0))
 
-    #Sets default camera values
+    # ── Default camera settings ────────────────────────────────────────
+    # These values work well for typical RHEED conditions.
+    # Exposure: 12 ms — long enough to capture diffraction without blur
+    # Gain: 17.5 dB — balanced signal without excessive noise
+    # Gamma: 1.0 (linear) — no tone mapping applied by default
 
     exposure_us=float(12000)
     gain_db=float(17.5)
@@ -273,6 +344,13 @@ def main():
     t0 = time.time()
     
     # ---------------------- ROI CSV Logging Setup ----------------------
+    # ── ROI CSV logging setup ──────────────────────────────────────────
+    # Creates a timestamped CSV file at session start.
+    # Columns: frame index, wall-clock timestamp, camera elapsed time,
+    # video frame number, ROI uuid, ROI id, mean/sum intensity,
+    # area, center (cx,cy), radii (rx,ry), shape type.
+    # Data is buffered in memory and flushed to disk every 1 second
+    # to avoid I/O blocking the processing thread.
     session_timestamp = datetime.datetime.now()
 
     csv_dir = (
@@ -337,6 +415,13 @@ def main():
   
 
     # mouse callback
+    # ── Mouse callback — main dashboard window ─────────────────────────
+    # Handles all ROI interactions: left-click to draw or select,
+    # drag to move, edge-drag to resize, right-click to delete.
+    # Also handles line drawing when LineManager is in draw_mode.
+    # Mouse coordinates are reverse-transformed through two scaling
+    # stages (global window fit → feed aspect fit) to get true pixel
+    # coordinates in the original camera frame.
     def mouse_cb(event, x, y, flags, _param):
         nonlocal ml_toggle_request, feed_scale, feed_x_offset, feed_y_offset
         nonlocal global_scale, global_x_offset, global_y_offset
@@ -411,7 +496,12 @@ def main():
         popup_mouse_y = y
         
         
-        # ---------------- WORKER THREAD ----------------
+    # ---------------- WORKER THREAD ----------------
+    # ── Capture thread ─────────────────────────────────────────────────
+    # Runs independently at the camera's native frame rate.
+    # Pushes (frame, elapsed_time) tuples into frame_q.
+    # If the queue is full (processing is slow), the oldest frame
+    # is evicted so the display always shows the most recent frame.
     def capture_loop():
         """Fast acquisition + immediate recording."""
         nonlocal ml_capture, ml_writer_color, ml_frame_count
@@ -447,7 +537,13 @@ def main():
                 print("capture_loop error:", e)
                 traceback.print_exc()
                 time.sleep(0.05)
-
+                
+    # ── Processing thread ──────────────────────────────────────────────
+    # Drains frame_q, applies colorization, updates all ROI intensities,
+    # extracts line profiles, appends to the CSV log buffer, and writes
+    # video frames if recording is active.
+    # Always drains the full queue before processing to stay current —
+    # skipped frames are not logged but the display stays live.
     def process_loop():
         """All heavier work happens here: ROI, overlays, logging, recording, UI buffers."""
         nonlocal frame_idx, total_logged_rows
@@ -551,6 +647,13 @@ def main():
     proc_thread.start()
     print("Frame grabbed")
 
+
+    # ── UI / display loop (main thread) ───────────────────────────────
+    # Reads the latest processed frame from shared buffers (frame_lock),
+    # draws the camera settings overlay and recording indicator,
+    # renders the live feed with footer, handles all keyboard shortcuts,
+    # and manages the ROI Monitor popout window.
+    # Runs at OpenCV's waitKey(1) rate — effectively as fast as possible.
     try:
         while True:       
             with frame_lock:
@@ -1011,6 +1114,12 @@ def main():
     
             
             # handle capture toggle
+            # ── Video recording toggle (triggered by key 'M') ─────────────────
+            # On START: creates a timestamped .avi file using XVID codec,
+            #           sets FPS from the measured capture rate.
+            # On STOP:  releases the VideoWriter and prints recording statistics
+            #           (real duration, frames written, effective FPS).
+            # Video files are saved to VIDEO_OUTPUT_DIR / YYYY / Month / MMDDYY /
             if ml_toggle_request:
                 ml_toggle_request = False
 
@@ -1068,7 +1177,12 @@ def main():
                     ml_capture = False
                     ml_frame_count = 0
                     color_file = None
-
+                    
+    # ── Shutdown sequence ──────────────────────────────────────────────
+    # Sets stop_event so capture and processing threads exit their loops.
+    # Waits up to 2 seconds for each thread to finish cleanly.
+    # Releases any open VideoWriter and flushes remaining CSV log rows
+    # to disk so no data is lost on exit.
     finally:
         stop_event.set()
         try:

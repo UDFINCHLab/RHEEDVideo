@@ -1,3 +1,16 @@
+"""
+RHEED HDR Monitoring Dashboard — hdr_rheed_base.py
+
+HDR variant of the live monitoring dashboard. Uses a locked 3-exposure cycling
+pipeline (Mertens fusion) to produce high dynamic range RHEED frames in real time.
+Exposure values are adjustable live via keyboard and applied on demand.
+All other features (ROI tracking, CSV logging, video recording) are identical to main.py.
+
+HDR exposures: 5000 / 15000 / 45000 µs (adjustable via keys 7/8/9 + U to apply)
+Fixed gain:    17.5 dB
+Dependencies:  PySpin (camera SDK), OpenCV, NumPy
+Falls back to DummyCamera if no hardware is detected.
+"""
 import os
 import sys
 import cv2
@@ -14,7 +27,13 @@ from roi_manager import ROIManager, LineManager
 from config import VIDEO_OUTPUT_DIR, ROI_OUTPUT_DIR
 from pathlib import Path
 
-
+# ── HDR pipeline constants ─────────────────────────────────────────────
+# HDR_MODE:        locked True — this file only runs the HDR pipeline
+# EXPOSURE_CYCLE:  the three exposure levels fused per output frame (µs)
+# GAIN_CONSTANT:   fixed sensor gain applied throughout the session
+# merge_mertens:   OpenCV Mertens HDR fusion object, weighted by exposure only
+# SAVE_ONE_TRIPLET: if True, saves one raw + colorized exposure triplet to disk
+#                  after the 10th fused frame (for calibration / inspection)
 HDR_MODE = True  # locked HDR pipeline (no RAW mode)
 
 EXPOSURE_CYCLE = [5000.0, 15000.0, 45000.0]  # microseconds
@@ -30,6 +49,12 @@ SAVE_ONE_TRIPLET = True
 
 # ---------------------- aspect ratio helper ----------------------
 def fit_to_window(frame, screen_w, screen_h):
+    """
+    Scale a frame to fill the full window while maintaining aspect ratio.
+    Centers the image on a black padded canvas sized to the window.
+
+    Returns: (padded_frame, scale_factor, x_offset, y_offset)
+    """
     h, w = frame.shape[:2]
 
     # ---- Guard against invalid window sizes ----
@@ -58,6 +83,12 @@ def fit_to_window(frame, screen_w, screen_h):
 
 
 def fit_preserve_aspect(frame, target_w, target_h):
+    """
+    Scale a frame to fit within (target_w, target_h) without stretching.
+    Used to fit the live feed inside its panel before stacking with the footer.
+
+    Returns: (resized_frame, scale_factor, x_offset, y_offset)
+    """
     fh, fw = frame.shape[:2]
 
     scale = min(target_w / fw, target_h / fh)
@@ -79,6 +110,20 @@ def fit_preserve_aspect(frame, target_w, target_h):
 
 # ---------------------- chart rendering ----------------------
 def render_chart(roi, width, height, now_s, title, y_state):
+    """
+    Draw a real-time intensity vs. time waveform chart for a single ROI.
+    Uses exponential smoothing on the y-axis range to prevent jarring rescales.
+
+    Args:
+        roi:     ROI data dict containing 't' (time) and 'y' (intensity) lists
+        width:   Chart width in pixels
+        height:  Chart height in pixels
+        now_s:   Current elapsed time in seconds (kept for API consistency)
+        title:   Label shown in the top-left corner of the chart
+        y_state: Persistent dict for smoothed y-axis min/max across frames
+
+    Returns: (chart_image, (n_points, elapsed_s, ymin, ymax))
+    """
     chart = np.full((height, width, 3), 255, np.uint8)
 
     ml, mr, mt, mb = 100, 20, 54, 44
@@ -159,6 +204,18 @@ def render_chart(roi, width, height, now_s, title, y_state):
 
 # ---------------------- gradient ----------------------
 def apply_gradient(frame, lut="rheed_gradient_lut.npy", strength=0.8):
+    """
+    Apply a custom color gradient LUT to a grayscale RHEED frame for visualization.
+    The LUT is loaded once and cached as a function attribute for performance.
+    Falls back to plain grayscale BGR if the LUT file is missing.
+
+    Args:
+        frame:    Input image — grayscale (2D) or BGR (3D) numpy array
+        lut:      Path to the .npy color lookup table file
+        strength: Blend weight between gray and colorized output (0.0–1.0)
+
+    Returns: BGR numpy array with gradient colorization applied
+    """
     if frame.ndim == 3:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     else:
@@ -196,6 +253,13 @@ def main():
     line_manager = LineManager()
     
     # ---------------- Threaded runtime state ----------------
+    # ── Thread synchronization primitives ─────────────────────────────
+    # stop_event:      signals all threads to exit cleanly on shutdown
+    # roi_lock:        prevents race conditions when ROIs are drawn/moved/read
+    # frame_lock:      protects the latest_gray / latest_disp shared buffers
+    # log_lock:        ensures CSV log_buffer is flushed safely from any thread
+    # hdr_cycle_dirty: flag set when user applies new HDR exposures via key 'U'
+    #                  causes capture_loop to flush the pipeline and restart cleanly
     stop_event = threading.Event()
 
     roi_lock = Lock()      # protects roi + line_manager mutations
@@ -217,10 +281,17 @@ def main():
     
     # Buffer of frames between acquisition and processing.
     # 600 frames ≈ 20 seconds at 30 fps. Increase if you have RAM.
+    # ── Inter-thread frame queue ───────────────────────────────────────
+    # Receives fused HDR frames (not raw) from capture_loop.
+    # maxsize=2 keeps memory bounded — oldest frame dropped if processing lags.
     frame_q = queue.Queue(maxsize=2)
 
 
     # camera
+    # ── Camera initialization ──────────────────────────────────────────
+    # Connects to FLIR Blackfly S and locks it to maximum available FPS.
+    # FPS is locked to max so exposure cycling runs as fast as the hardware allows.
+    # Falls back to DummyCamera if no hardware is detected.
     try:
         cam = Camera()
 
@@ -276,7 +347,10 @@ def main():
     gamma_min = float(s.get("gamma_min", 0.25))
     gamma_max = float(s.get("gamma_max", 4.0))
 
-    #Sets default camera values
+    # ── Default camera settings ────────────────────────────────────────
+    # Initial exposure / gain / gamma applied at startup.
+    # In HDR mode the capture_loop overrides exposure per-frame via EXPOSURE_CYCLE,
+    # but these values are used as the starting point before HDR cycling begins.
 
     exposure_us=float(12000)
     gain_db=float(17.5)
@@ -303,6 +377,12 @@ def main():
     t0 = time.time()
     
     # ---------------------- ROI CSV Logging Setup ----------------------
+    # ── ROI CSV logging setup ──────────────────────────────────────────
+    # Creates a timestamped CSV file at session start.
+    # Columns: frame index, wall-clock timestamp, camera elapsed time,
+    # video frame number, ROI uuid, ROI id, mean/sum intensity,
+    # area, center (cx,cy), radii (rx,ry), shape type.
+    # Data is buffered in memory and flushed to disk every 1 second.
     session_timestamp = datetime.datetime.now()
 
     csv_dir = (
@@ -367,6 +447,10 @@ def main():
   
 
     # mouse callback
+    # ── Mouse callback — main dashboard window ─────────────────────────
+    # Handles ROI draw/select/move/resize/delete and line drawing.
+    # Coordinates are reverse-transformed through global window scaling
+    # and feed aspect scaling to map back to original camera pixel space.
     def mouse_cb(event, x, y, flags, _param):
         nonlocal ml_toggle_request, feed_scale, feed_x_offset, feed_y_offset
         nonlocal global_scale, global_x_offset, global_y_offset
@@ -441,7 +525,16 @@ def main():
         popup_mouse_y = y
         
         
-        # ---------------- WORKER THREAD ----------------
+    # ---------------- WORKER THREAD ----------------
+    # ── Capture thread — HDR exposure cycling ─────────────────────────
+    # Cycles through EXPOSURE_CYCLE (3 exposures) one frame at a time.
+    # Discards 3 frames after each exposure change to let the sensor settle.
+    # Once a full triplet is collected, fuses them with Mertens HDR fusion,
+    # applies temporal smoothing (alpha=0.7) to reduce inter-frame flicker,
+    # and pushes the fused uint8 frame into frame_q.
+    # On hdr_cycle_dirty=True, flushes all buffers and restarts the cycle
+    # cleanly so new exposure values take effect without visual glitches.
+    # Also handles video recording directly in this thread for HDR output.
     def capture_loop():
         """Acquisition loop supporting RAW and HDR fusion."""
         nonlocal ml_capture, ml_writer_color, ml_frame_count, hdr_cycle_dirty
@@ -648,7 +741,10 @@ def main():
                 traceback.print_exc()
                 time.sleep(0.05)
 
-
+    # ── Processing thread ──────────────────────────────────────────────
+    # Drains frame_q, applies gradient colorization, updates ROI intensities,
+    # extracts line profiles, logs to CSV buffer, and measures HDR FPS.
+    # HDR FPS is calculated here (fused frames per second) and shown in footer.
     def process_loop():
         """All heavier work happens here: ROI, overlays, logging, recording, UI buffers."""
         nonlocal frame_idx, total_logged_rows
@@ -742,6 +838,13 @@ def main():
     proc_thread.start()
     print("Frame grabbed")
 
+
+    # ── UI / display loop (main thread) ───────────────────────────────
+    # Reads the latest fused HDR frame, draws the camera settings overlay
+    # (shows both active and pending HDR exposures / gain),
+    # renders the live feed with dynamic footer, handles all keyboard shortcuts
+    # including HDR exposure editing (7/8/9 to select, +/- to adjust, U to apply),
+    # and manages the ROI Monitor popout window.
     try:
         while True:
             with frame_lock:
@@ -1184,6 +1287,15 @@ def main():
                 
             
             # -------- HDR Exposure Editing --------
+            # ── HDR exposure editing keys ──────────────────────────────────
+            # Changes are staged as "pending" and only applied when 'U' is pressed.
+            # This prevents partial exposure cycles from corrupting the fused output.
+            # 7/8/9 = select which of the 3 exposures to edit
+            # +/-   = increase/decrease selected exposure by hdr_step (500 µs)
+            # U     = apply pending exposures + gain to the live pipeline
+            # G/F   = increase/decrease pending gain (applied with U)
+            # K/J   = adjust gamma immediately
+            # H     = toggle gamma on/off
             if HDR_MODE:
 
                 if key == ord('7'):
@@ -1261,6 +1373,11 @@ def main():
             
             
             # handle capture toggle
+            # ── Video recording toggle (triggered by key 'M') ─────────────────
+            # Saves the gradient-colorized fused HDR frames as .avi (XVID).
+            # FPS is set from the measured HDR FPS (fused frames per second),
+            # with a minimum of 3.0 FPS to ensure a valid video file.
+            # Files saved to VIDEO_OUTPUT_DIR / YYYY / Month / MMDDYY /
             if ml_toggle_request:
                 ml_toggle_request = False
 
@@ -1319,6 +1436,11 @@ def main():
                     ml_capture = False
                     ml_frame_count = 0
                     color_file = None
+                    
+    # ── Shutdown sequence ──────────────────────────────────────────────
+    # Sets stop_event so capture and processing threads exit their loops.
+    # Waits up to 2 seconds for each thread, releases VideoWriter,
+    # and flushes any remaining CSV rows to disk before exit.                
     finally:
         stop_event.set()
         try:

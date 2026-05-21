@@ -1,3 +1,16 @@
+"""
+FLIR Blackfly S camera wrapper — camera.py
+
+Wraps the PySpin (Spinnaker) SDK to provide a clean, simple API
+for the RHEED dashboard. Handles camera initialization, stream buffer
+configuration, exposure/gain/gamma control via GenICam nodes,
+frame acquisition, and clean shutdown.
+
+Raises RuntimeError on init if no camera is detected,
+which main.py catches to fall back to DummyCamera.
+
+Dependencies: PySpin (FLIR Spinnaker SDK), NumPy
+"""
 import PySpin
 import numpy as np
 
@@ -8,6 +21,13 @@ class Camera:
     Exposes Exposure/Gain/Gamma controls via GenICam nodes (Spinnaker-style).
     """
     def __init__(self):
+        """
+        Initialize the first detected FLIR camera.
+        Configures stream buffering to 'OldestFirst' with 100 manual buffers
+        to prevent frame drops during HDR exposure cycling.
+        Reads and caches exposure, gain, and gamma ranges from the camera hardware.
+        Raises RuntimeError if no camera is found.
+        """
         self.has_hw_control = True
 
         self.system = PySpin.System.GetInstance()
@@ -52,31 +72,44 @@ class Camera:
         print("📸 Camera initialized (PySpin acquisition + node control ready).")
 
     # -------------------- generic node helpers --------------------
+    # ── GenICam node helpers ───────────────────────────────────────────
+    # These private methods safely retrieve typed node pointers from the
+    # camera's nodemap. Each returns None if the node is unavailable or
+    # not readable, so callers can check before attempting to read/write.
     def _get_node(self, name):
+        """Return a raw GenICam node by name, or None on failure."""
         try:
             return self.nodemap.GetNode(name)
         except Exception:
             return None
 
     def _get_float_node(self, name):
+        """Return a readable CFloatPtr node by name, or None if unavailable."""
         node = PySpin.CFloatPtr(self._get_node(name))
         if node is None or (not PySpin.IsAvailable(node)) or (not PySpin.IsReadable(node)):
             return None
         return node
 
     def _get_bool_node(self, name):
+        """Return a readable CBooleanPtr node by name, or None if unavailable."""
+
         node = PySpin.CBooleanPtr(self._get_node(name))
         if node is None or (not PySpin.IsAvailable(node)) or (not PySpin.IsReadable(node)):
             return None
         return node
 
     def _get_enum_node(self, name):
+        """Return a readable CEnumerationPtr node by name, or None if unavailable."""
         node = PySpin.CEnumerationPtr(self._get_node(name))
         if node is None or (not PySpin.IsAvailable(node)) or (not PySpin.IsReadable(node)):
             return None
         return node
 
     def _set_enum_symbolic(self, enum_name, symbolic):
+        """
+        Set an enumeration node to the given symbolic value (e.g. 'Off', 'Manual').
+        Returns True if successful, False if the node or entry is unavailable.
+        """
         enum_node = self._get_enum_node(enum_name)
         if enum_node is None or (not PySpin.IsWritable(enum_node)):
             return False
@@ -90,10 +123,16 @@ class Camera:
 
     @staticmethod
     def _clamp(v, vmin, vmax):
+        """Clamp value v to the range [vmin, vmax]."""
         return max(vmin, min(vmax, v))
 
     # -------------------- node init (read ranges/current) --------------------
     def _init_exposure(self):
+        """
+        Disable auto-exposure and read the hardware min, max, and current
+        exposure time in microseconds from the ExposureTime node.
+        Returns (min_us, max_us, current_us).
+        """
         # Ensure manual control if possible
         self._set_enum_symbolic("ExposureAuto", "Off")
 
@@ -106,6 +145,11 @@ class Camera:
         return vmin, vmax, val
 
     def _init_gain(self):
+        """
+        Disable auto-gain and read the hardware min, max, and current
+        gain in dB from the Gain node.
+        Returns (min_db, max_db, current_db).
+        """
         self._set_enum_symbolic("GainAuto", "Off")
 
         node = self._get_float_node("Gain")
@@ -117,6 +161,11 @@ class Camera:
         return vmin, vmax, val
 
     def _init_gamma(self):
+        """
+        Read the hardware gamma range and current value.
+        Handles cameras that expose GammaEnable, GammaEnabled, or neither.
+        Returns (min, max, current_value, enabled).
+        """
         # Some cameras expose GammaEnable (bool) + Gamma (float)
         # Some expose GammaEnabled or no enable at all.
         gamma_node = self._get_float_node("Gamma")
@@ -142,12 +191,18 @@ class Camera:
 
     # -------------------- acquisition --------------------
     def start(self):
+        """Begin image acquisition on the camera."""
         self.cam.BeginAcquisition()
         print("🎥 Acquisition started.")
 
 
 
     def get_frame(self):
+        """
+        Grab and return the next frame as a NumPy array.
+        Waits up to 1000 ms for a frame before timing out.
+        Returns None if the frame is incomplete or a grab error occurs.
+        """
         try:
             image = self.cam.GetNextImage(1000)  # 1000ms timeout
             if image.IsIncomplete():
@@ -163,6 +218,10 @@ class Camera:
             return None
 
     def stop(self):
+        """
+        Stop acquisition, deinitialize the camera, and release all
+        PySpin resources in the correct order to avoid SDK warnings.
+        """
         try:
             self.cam.EndAcquisition()
         except Exception:
@@ -194,6 +253,11 @@ class Camera:
 
     # -------------------- public settings API --------------------
     def get_settings(self):
+        """
+        Return cached camera settings as a dict.
+        Matches the format of DummyCamera.get_settings() so the dashboard
+        can read min/max ranges from either camera type identically.
+        """
         return {
             "has_hw_control": True,
             "exposure_us": self.exposure_us,
@@ -209,6 +273,11 @@ class Camera:
         }
 
     def set_exposure_us(self, value_us: float):
+        """
+        Set exposure time in microseconds via the ExposureTime GenICam node.
+        Disables auto-exposure first, clamps to hardware limits.
+        Returns the value actually applied by the camera.
+        """
         self._set_enum_symbolic("ExposureAuto", "Off")
         node = self._get_float_node("ExposureTime")
         if node is None or (not PySpin.IsWritable(node)):
@@ -220,6 +289,11 @@ class Camera:
         return self.exposure_us
 
     def set_gain_db(self, value_db: float):
+        """
+        Set sensor gain in dB via the Gain GenICam node.
+        Disables auto-gain first, clamps to hardware limits.
+        Returns the value actually applied by the camera.
+        """
         self._set_enum_symbolic("GainAuto", "Off")
         node = self._get_float_node("Gain")
         if node is None or (not PySpin.IsWritable(node)):
@@ -231,6 +305,11 @@ class Camera:
         return self.gain_db
 
     def set_gamma_enabled(self, enabled: bool):
+        """
+        Enable or disable gamma correction via GammaEnable / GammaEnabled node.
+        Falls back gracefully if the camera does not expose an enable node.
+        Returns the applied boolean value.
+        """
         enable_node = self._get_bool_node("GammaEnable")
         if enable_node is None:
             enable_node = self._get_bool_node("GammaEnabled")
@@ -245,6 +324,12 @@ class Camera:
         return self.gamma_enabled
 
     def set_gamma(self, gamma_value: float):
+        """
+        Set gamma correction value via the Gamma GenICam node.
+        Automatically enables gamma when called.
+        Clamps to hardware min/max limits.
+        Returns the value actually applied by the camera.
+        """
         gamma_node = self._get_float_node("Gamma")
         if gamma_node is None or (not PySpin.IsWritable(gamma_node)):
             return self.gamma
@@ -258,6 +343,11 @@ class Camera:
         return self.gamma
 
     def get_fps(self):
+        """
+        Return the current resulting frame rate from the camera hardware.
+        Tries AcquisitionResultingFrameRate first, then AcquisitionFrameRate.
+        Returns 0.0 if neither node is available.
+        """
         try:
             node = self._get_float_node("AcquisitionResultingFrameRate")
             if node is not None:

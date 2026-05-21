@@ -1,3 +1,20 @@
+"""
+ROI and Line Profile Manager — roi_manager.py
+
+Provides two classes used by the RHEED dashboard:
+
+ROIManager — manages up to 6 regions of interest (ellipse or rectangle).
+    Handles mouse-driven draw / move / resize / delete interactions,
+    computes per-frame mean intensity, sum, and area for each ROI,
+    and stores time-series data for real-time chart rendering.
+
+LineManager — manages a single user-drawn intensity line profile.
+    Extracts pixel intensity along the line from each grayscale frame
+    and renders it in a live pop-out window.
+
+Dependencies: OpenCV, NumPy
+"""
+
 import cv2
 import numpy as np
 from collections import deque
@@ -7,7 +24,9 @@ import uuid
 from pathlib import Path
 
 
-
+# ── ROI color palette ──────────────────────────────────────────────────
+# Each ROI ID (1–6) is assigned a fixed BGR color for overlay and charts.
+# Colors are chosen to be visually distinct on both dark and light backgrounds.
 ROI_COLORS = {
     1: (255, 0, 0),       # Blue
     2: (0, 165, 255),     # Orange
@@ -24,6 +43,13 @@ def _get_roi_color(rid):
 class ROIManager:
     """Manages two ROIs (ellipse or rectangle) with mouse + keyboard interaction."""
     def __init__(self, max_history=6000):
+        """
+        Initialize the ROI manager with an empty ROI set.
+
+        Args:
+            max_history: Maximum number of intensity samples stored per ROI.
+                         At 30 fps, 6000 samples = ~200 seconds of history.
+        """
         self.rois = {}
         self.max_history = max_history
         self.drawing = False
@@ -43,12 +69,17 @@ class ROIManager:
 
     # ---------- toggle shape ----------
     def toggle_shape(self, mode):
+        """Set the drawing mode to 'ellipse' or 'rect' for new ROIs."""
         if mode in ("ellipse", "rect"):
             self.shape_mode = mode
             print(f"✏️ ROI drawing mode → {self.shape_mode}")
 
     # ---------- helpers ----------
     def _allocate_id(self):
+        """
+        Find the lowest available ROI ID in the range 1–6.
+        Returns None and prints a warning if all 6 slots are taken.
+        """
         for rid in range(1, 7):   # Allow only 1–6
             if rid not in self.rois:
                 return rid
@@ -58,6 +89,17 @@ class ROIManager:
 
 
     def _new_roi(self, rid, center, rx, ry, shape=None):
+        """
+        Create and return a new ROI data dict.
+        Each ROI stores its geometry, color, UUID, and time-series deques.
+
+        Args:
+            rid:    Integer ID (1–6)
+            center: (x, y) pixel coordinate of the ROI center
+            rx:     Half-width radius in pixels (minimum 5)
+            ry:     Half-height radius in pixels (minimum 5)
+            shape:  'ellipse' or 'rect' — defaults to current shape_mode
+        """
         return {
             "id": rid,
             "uuid": str(uuid.uuid4()),  # ← ADD THIS LINE
@@ -71,11 +113,13 @@ class ROIManager:
         }
 
     def reset(self):
+        """Clear all ROIs and reset all interaction state flags."""
         self.rois.clear()
         self.drawing = self.moving = self.resizing = False
         self.active_roi = self.start_point = self.temp_roi = None
 
     def remove_nearest(self, x, y):
+        """Remove the ROI whose center is closest to the given (x, y) coordinate."""
         if not self.rois:
             return
         rid = min(self.rois.keys(),
@@ -86,6 +130,11 @@ class ROIManager:
 
     # ---------- draw / move / resize ----------
     def start_drawing(self, x, y):
+        """
+        Begin drawing a new ROI at position (x, y).
+        Allocates the next available ID and creates a temporary ROI.
+        Called on left mouse button down when no existing ROI is clicked.
+        """
         
         rid = self._allocate_id()
         if rid is None:
@@ -97,12 +146,14 @@ class ROIManager:
         self.temp_roi = self._new_roi(rid, (x, y), 1, 1, shape=self.shape_mode)
 
     def update_drawing(self, x, y):
+        """Update the size of the ROI currently being drawn as the mouse moves."""
         if self.drawing and self.temp_roi:
             cx, cy = self.start_point
             self.temp_roi["rx"] = abs(x - cx)
             self.temp_roi["ry"] = abs(y - cy)
 
     def finish_drawing(self):
+        """Finalize the drawn ROI and add it to the active ROI set."""
         if self.drawing and self.temp_roi:
             rid = self.temp_roi["id"]
             self.rois[rid] = self.temp_roi
@@ -133,6 +184,7 @@ class ROIManager:
         return False
 
     def move_selected(self, x, y):
+        """Translate the selected ROI by the mouse delta since last position."""
         if self.moving and self.active_roi:
             roi = self.rois[self.active_roi]
             dx, dy = x - self.start_point[0], y - self.start_point[1]
@@ -141,7 +193,11 @@ class ROIManager:
             self.start_point = (x, y)
 
     def resize_selected(self, delta=None, x=None, y=None):
-        """Keyboard delta OR mouse resize (Shift + drag)."""
+        """
+        Resize the selected ROI.
+        - Keyboard mode: pass delta (+N or -N pixels applied to both rx and ry)
+        - Mouse mode:    pass x, y — radii are set from distance to center
+        """
         if not self.active_roi:
             return
         roi = self.rois[self.active_roi]
@@ -162,11 +218,24 @@ class ROIManager:
 
 
     def release(self):
+        """Clear move/resize state after mouse button is released."""
         self.moving = self.resizing = False
         self.start_point = None
 
     # ---------- intensity ----------
     def update_intensities(self, frame_gray, timestamp_s):
+        """
+        Compute and store intensity metrics for all active ROIs on the current frame.
+
+        For each ROI, builds a binary mask matching its shape, then computes:
+            - mean intensity (raw_mean) — used for chart plotting
+            - sum intensity             — logged to CSV
+            - area in pixels            — logged to CSV
+
+        Args:
+            frame_gray:  Grayscale numpy array of the current camera frame
+            timestamp_s: Elapsed time in seconds since session start
+        """
         for roi in self.rois.values():
             
         
@@ -197,6 +266,13 @@ class ROIManager:
 
     # ---------- overlay ----------
     def draw_overlays(self, frame_bgr):
+        """
+        Draw all active ROI shapes and ID labels onto the display frame.
+        Also draws the in-progress temporary ROI while the user is dragging.
+
+        Args:
+            frame_bgr: BGR numpy array — modified in place
+        """
         for rid, roi in self.rois.items():
             cx, cy = roi["center"]
 
@@ -236,6 +312,10 @@ class ROIManager:
 
 class LineManager:
     def __init__(self):
+        """
+        Initialize the line manager with no line defined.
+        draw_mode must be toggled on (key 'L') before the user can draw a line.
+        """
         self.draw_mode = False
         self.drawing = False
         self.pt1 = None
@@ -245,10 +325,13 @@ class LineManager:
         self._win_created = False
 
     def toggle(self):
+        """Toggle line drawing mode on/off. When ON, next click-drag draws the line."""
+
         self.draw_mode = not self.draw_mode
         print(f"📏 Line Draw Mode → {'ON' if self.draw_mode else 'OFF'}")
         
     def clear_line(self):
+        """Delete the current line, clear the profile data, and close the profile window."""
         self.pt1 = None
         self.pt2 = None
         self.profile = None
@@ -277,6 +360,16 @@ class LineManager:
             cv2.line(frame, self.pt1, self.pt2, (120, 255, 120), 2, cv2.LINE_AA)
 
     def extract_profile(self, gray_frame, now_s=None):
+        """
+        Sample pixel intensities along the drawn line using linear interpolation.
+        Coordinates are clipped to frame boundaries to avoid index errors.
+
+        Args:
+            gray_frame: Grayscale numpy array of the current camera frame
+            now_s:      Elapsed time in seconds (stored for footer display)
+
+        Returns: 1D numpy array of intensity values, or None if no line is set
+        """
         if not self.pt1 or not self.pt2:
             return None
 
@@ -319,6 +412,13 @@ class LineManager:
         return result
 
     def render_window(self):
+        """
+        Render the intensity line profile in a resizable pop-out OpenCV window.
+        Draws a waveform chart with axis labels, grid lines, and a footer showing
+        data point count, elapsed time, and minimum intensity.
+        The chart is rendered at a fixed base resolution and then scaled to fit
+        the current window size to prevent layout distortion on resize.
+        """
         if self.profile is None or len(self.profile) < 2:
             return
 
