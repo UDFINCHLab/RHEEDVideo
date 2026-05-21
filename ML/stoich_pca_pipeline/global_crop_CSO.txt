@@ -1,0 +1,3 @@
+# Global crop computed across all CSO videos
+# Format: [top, bottom, left, right]
+GLOBAL_CROP = [121, 403, 85, 465]

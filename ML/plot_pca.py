@@ -1,3 +1,18 @@
+"""
+PCA results plotting — plot_pca.py
+
+Reads PCA results from an HDF5 file and generates a combined
+publication-quality figure showing eigenvalue time series (left column)
+and eigenvector spatial mode images (right column) for each component.
+
+The figure is saved as Eigen_Values_and_Vectors.png at 1000 dpi.
+Eigenvectors are displayed using a blue-white-red diverging colormap
+so positive and negative spatial modes are clearly distinguishable.
+
+Run directly to plot the latest H5 file in results/pre_processing/.
+
+Dependencies: h5py, NumPy, Matplotlib, OpenCV
+"""
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
@@ -9,7 +24,10 @@ from os import makedirs
 from typing import Optional, cast, Any
 
 
-
+# ── Default settings (used when running this file directly) ───────────
+# NUM_VECTORS: number of components to plot (-1 = plot all)
+# FIG_SIZE:    figure dimensions in inches — (3.375, 6.75) for single
+#              journal column, (7, 5) for double column
 INPUT_FILE = ''
 OUT_PATH = ''
 OUT_NAME = ''
@@ -26,6 +44,20 @@ def plot_pca(Input_File: str,
              Num_Vectors: int=-1,
              Fig_Size: tuple[float,float]=(7,5),
              show: bool=False) -> None:
+    """
+    Main entry point — load PCA results from H5 and generate the combined figure.
+    Loads eigenvectors and eigenvalues, applies orientation normalization,
+    rescales eigenvector images to a fixed output size, then calls
+    plot_eigenvalues_and_vectors to render and save the figure.
+
+    Args:
+        Input_File:  Path to the HDF5 file containing the 'pca' group
+        Out_Path:    Directory to save the output figure
+        Title:       Figure title string
+        Num_Vectors: Number of components to plot (-1 = all)
+        Fig_Size:    Figure dimensions in inches
+        show:        If True, display interactively before saving
+    """
     
     if Out_Path[-1] != '/':
         Out_Path += '/'
@@ -72,6 +104,11 @@ def plot_pca(Input_File: str,
 
 
 def adjustments(fig_size: tuple[float,float])-> list[float]:
+    """
+    Return subplot margin adjustments for a given figure size.
+    Values are [left, bottom, right, top, wspace, hspace, y_title, x_title].
+    Used to fine-tune layout for publication-ready figures at specific sizes.
+    """
     
     #             [L,     B,     R,     T,     W,     H,     YT,     XT]
     if fig_size == (7, 2):
@@ -95,6 +132,16 @@ def adjustments(fig_size: tuple[float,float])-> list[float]:
 
 
 def scale_eigen_vectors(eigen_vectors: np.ndarray, out_shape: tuple[int,int]=(101,201)) -> np.ndarray:
+    """
+    Resize all eigenvector images to a fixed output shape using bicubic interpolation.
+    Ensures consistent image dimensions in the figure regardless of original resolution.
+
+    Args:
+        eigen_vectors: Array of shape (y, x, n_components)
+        out_shape:     Target (height, width) for each eigenvector image
+
+    Returns: Resized array of shape (out_shape[0], out_shape[1], n_components)
+    """
     # Rescale the x and y dims of the eigen vectors to the output shape
     num_vectors = eigen_vectors.shape[2]
     new_vectors = np.empty((out_shape[0], out_shape[1], num_vectors))
@@ -107,6 +154,13 @@ def scale_eigen_vectors(eigen_vectors: np.ndarray, out_shape: tuple[int,int]=(10
 
 
 def invert_eigens(eigen_values: np.ndarray, eigen_vectors: np.ndarray) -> np.ndarray:
+    """
+    Normalize eigenvector sign so the median pixel value is always negative.
+    PCA eigenvectors have arbitrary sign — this ensures consistent visual
+    orientation across runs so the RWB colormap is always interpretable.
+
+    Returns: (eigen_values, eigen_vectors) with signs corrected
+    """
     # If the eigenvector median is negative, invert the eigenvector and eigenvalue
     for i in range(eigen_values.shape[1]):
         mid_val = np.max(eigen_vectors[:,:,i]) - (np.max(eigen_vectors[:,:,i]) - np.min(eigen_vectors[:,:,i]))/2
@@ -118,6 +172,17 @@ def invert_eigens(eigen_values: np.ndarray, eigen_vectors: np.ndarray) -> np.nda
 
 
 def reshape_eigen_vectors(eigen_vectors: np.ndarray, image_shape: list[int]) -> np.ndarray:
+    """
+    Reshape flat eigenvectors back into 2D spatial images.
+    PCA components are stored as 1D pixel vectors — this restores them
+    to (y, x) frame shape for visualization.
+
+    Args:
+        eigen_vectors: Array of shape (n_components, pixels)
+        image_shape:   (height, width) of the original frame
+
+    Returns: Array of shape (height, width, n_components)
+    """
     
     num_vectors = eigen_vectors.shape[0]
     
@@ -132,6 +197,12 @@ def reshape_eigen_vectors(eigen_vectors: np.ndarray, image_shape: list[int]) -> 
 
 
 def plot_eigenvalues_and_vectors(eigen_values: np.ndarray, times: np.ndarray, eigen_vectors: np.ndarray, fig_size: tuple[float,float], out_path: str, title: str='') -> None:
+    """
+    Build and save the combined eigenvalue + eigenvector figure.
+    Uses GridSpec to create a two-column layout — eigenvalue time series
+    on the left and eigenvector spatial images on the right, one row per component.
+    Saved as Eigen_Values_and_Vectors.png at 1000 dpi.
+    """
     
     number_of_eigenvalues = eigen_values.shape[1]
     
@@ -182,6 +253,10 @@ def plot_eigenvalues_and_vectors(eigen_values: np.ndarray, times: np.ndarray, ei
 
 
 def plot_all_eigen_vectors(eigen_vectors: np.ndarray, axes: Optional[np.ndarray]) -> None:
+    """
+    Plot all eigenvector images into the provided axes, one per row.
+    Creates standalone axes if none are provided.
+    """
     
     if axes is None:
         number_of_eigenvectors = eigen_vectors.shape[-1]
@@ -196,6 +271,11 @@ def plot_all_eigen_vectors(eigen_vectors: np.ndarray, axes: Optional[np.ndarray]
         
         
 def plot_eigen_vector(eigen_vector: np.ndarray, ax: Optional[plt.Axes]) -> None:
+    """
+    Display a single eigenvector image using the RWB diverging colormap.
+    Normalizes to [-1, 1] with TwoSlopeNorm so zero maps to white,
+    making positive and negative spatial features clearly distinguishable.
+    """
     
     # Get the extreem value of the eigenvector
     extreem = np.max(np.abs(eigen_vector))
@@ -223,6 +303,11 @@ def plot_eigen_vector(eigen_vector: np.ndarray, ax: Optional[plt.Axes]) -> None:
 
 
 def plot_all_eigenvalues(eigen_values: np.ndarray, times: np.ndarray, axes: Optional[np.ndarray], fig_size: Optional[tuple]) -> None:
+    """
+    Plot all eigenvalue time series into the provided axes, one per row.
+    Time axis is rescaled to seconds, minutes, or hours as appropriate.
+    Creates a standalone figure if no axes are provided.
+    """
     
     
     # Rescale times if they are too large
@@ -268,6 +353,10 @@ def plot_all_eigenvalues(eigen_values: np.ndarray, times: np.ndarray, axes: Opti
 
 
 def plot_eigenvalues(eigenvalues: np.ndarray, times: np.ndarray, ax: Optional[plt.Axes]=None) -> None:
+    """
+    Plot a single eigenvalue time series as a scatter plot.
+    Y-axis ticks are set symmetrically at [-max, 0, +max] for clean layout.
+    """
     
     if ax is None:
         _, ax  = plt.subplots(1, 1, figsize=(7, 1.5))
@@ -294,6 +383,12 @@ def plot_eigenvalues(eigenvalues: np.ndarray, times: np.ndarray, ax: Optional[pl
 
 
 def scale_times(times: np.ndarray) -> tuple[np.ndarray, str]:
+    """
+    Rescale a time array to the most readable unit.
+    Converts seconds → minutes → hours as the duration grows.
+
+    Returns: (rescaled_times, unit_string)
+    """
     
     max_val = times.max()
     
@@ -313,7 +408,11 @@ def scale_times(times: np.ndarray) -> tuple[np.ndarray, str]:
     return new_times, unit
 
 
-
+# ── Custom colormaps ───────────────────────────────────────────────────
+# au_color_map:  blue → orange (Auburn University palette)
+# rwb_color_map: blue → white → red (diverging, used for eigenvectors)
+# auw_color_map: blue → white → orange (softer diverging variant)
+# train/val/test/background_color: consistent plot colors across all figures
 def au_color_map() -> LinearSegmentedColormap:
     # Define the RGB values for the start and end colors
     start_color = (11/255, 35/255, 65/255)  # Blue

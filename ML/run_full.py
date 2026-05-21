@@ -1,3 +1,20 @@
+"""
+Full RHEED ML pipeline runner — run_full.py
+
+Single entry point that runs the complete single-video analysis pipeline
+in sequence on the most recently recorded video in the captures/ folder:
+
+    1. Preprocessing   — crop, clean, and save frames to HDF5
+    2. PCA             — dimensionality reduction, eigenvalues + eigenvectors
+    3. K-Means         — cluster frames by diffraction pattern
+    4. Plot K-Means    — cluster trajectory + centroid images
+    5. Plot PCA        — eigenvalue time series + eigenvector spatial modes
+
+All settings are configured via the constants at the top of this file.
+Edit CROP, PCA_COMPONENTS, CLUSTERS etc. before running.
+
+Usage: python run_full.py
+"""
 import os
 
 from pre_processing import pre_processing
@@ -8,7 +25,9 @@ from plot_kmeans import plot_k_means
 
 
 ####################### Preprocessing Settings #######################
-
+# ── Pipeline settings ──────────────────────────────────────────────────
+# Edit these values before running. Each section corresponds to one
+# pipeline stage. See pre_processing.py for full parameter descriptions.
 FRAME_PERIOD = 1
 BLANK_THRESH = 10
 
@@ -64,6 +83,11 @@ MEANS_FIG_SIZE = (3.375, 3.375)
 
 
 def main() -> None:
+    """
+    Locate the latest video in captures/, run all five pipeline stages
+    in sequence, and save all outputs to the results/ directory.
+    Raises FileNotFoundError if no video is found in captures/.
+    """
     # ----- Resolve important paths -----
     project_root = os.path.dirname(os.path.dirname(__file__))
 

@@ -1,3 +1,20 @@
+"""
+K-Means clustering — k_means.py
+
+Reads PCA eigenvalues from an existing HDF5 file, runs K-Means clustering
+for one or more values of k, and writes the results back into the same file
+under the 'kmeans' group.
+
+For each k, the following are saved:
+    - Cluster labels per frame
+    - Cluster centers (in PCA eigenvalue space)
+    - Inertia, iteration count
+    - Centroid images (mean frame image per cluster)
+
+Run directly to cluster the latest H5 file in results/pre_processing/.
+
+Dependencies: h5py, NumPy, scikit-learn
+"""
 import h5py as h5
 import numpy as np
 from sklearn.cluster import KMeans
@@ -7,7 +24,11 @@ from sklearn.cluster import KMeans
 
 
 
-
+# ── Default settings (used when running this file directly) ───────────
+# RUNS:     number of K-Means initializations — higher = more stable result
+# CLUSTERS: tuple defining which k values to run
+#           (4, 4) runs only k=4
+#           (2, 8) runs k=2 through k=8
 INPUT_FILE = '' # Path/File.h5
 RUNS = 100
 CLUSTERS = (4, 4) # a tuple of integers
@@ -15,6 +36,19 @@ CLUSTERS = (4, 4) # a tuple of integers
 
 
 def k_means(Input_File: str, Runs: int=100, Clusters: tuple[int, int]=(1,10)) -> None:
+    """
+    Run K-Means clustering on PCA eigenvalues stored in an HDF5 file.
+    Results are written back into the same H5 file under the 'kmeans' group.
+    Any existing 'kmeans' group is deleted and replaced on each run.
+
+    Args:
+        Input_File: Path to the HDF5 file containing 'pca/eigenvalues'
+        Runs:       Number of K-Means initializations (n_init) per k value
+        Clusters:   Tuple defining which k values to run —
+                    1 value: runs k=1 to that value
+                    2 values: runs k=first to k=second (inclusive)
+                    3+ values: runs exactly those k values
+    """
     ############################ Load Data ############################
 
     # Print the settings
@@ -149,6 +183,18 @@ def print_settings(runs, clusters, input_file):
 
 
 def calculate_centroids(images: np.ndarray, label_list: list[np.ndarray]) -> np.ndarray:
+    """
+    Compute the mean image (centroid) for each cluster at each k value.
+
+    For each k, averages all frames assigned to each cluster label
+    to produce a representative centroid image per cluster.
+
+    Args:
+        images:     Full frame stack as a (y, x, n_frames) numpy array
+        label_list: List of label arrays, one per k value
+
+    Returns: List of centroid arrays, each shaped (y, x, k)
+    """
     
     centroids_list = []
     
@@ -177,6 +223,17 @@ def calculate_centroids(images: np.ndarray, label_list: list[np.ndarray]) -> np.
 
 
 def sort_clusters(cluster_labels: np.ndarray) -> np.ndarray:
+    """
+    Renumber cluster labels by order of first appearance in the sequence.
+    Ensures cluster 0 is always the first cluster seen in the video,
+    cluster 1 is the second new cluster seen, and so on.
+    This makes results consistent and comparable across runs.
+
+    Args:
+        cluster_labels: 1D numpy array of integer cluster labels
+
+    Returns: 1D numpy array with labels renumbered by first occurrence
+    """
 
     # Dictionary to store the first occurrence index of each label
     first_occurrence = {}

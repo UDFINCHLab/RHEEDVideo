@@ -1,3 +1,19 @@
+"""
+RHEED video preprocessing pipeline — pre_processing.py
+
+Converts a raw RHEED video file into a preprocessed HDF5 file ready for
+PCA and K-Means analysis. Applies a configurable sequence of image corrections
+per frame including cropping, scar removal, background subtraction, HDR
+simulation, RSS spot alignment, drift correction, and inversion.
+
+The output H5 file stores the processed frame stack, timestamps, and all
+settings used as attributes so results are fully reproducible.
+
+Main entry point: pre_processing()
+Run directly to process the latest video in the captures/ folder.
+
+Dependencies: OpenCV, NumPy, h5py
+"""
 # Imports
 import os
 import numpy as np
@@ -8,7 +24,10 @@ import zipfile as zf
 from math import floor
 
 
-
+# ── Default settings (used when running this file directly) ───────────
+# These are overridden when pre_processing() is called from run_full.py
+# or any other pipeline script that passes its own parameters.
+# See pre_processing() docstring for full parameter descriptions.
 IN_FILE = ''
 OUT_PATH = ''
 OUT_NAME = '' # Will be an h5 file 
@@ -130,7 +149,7 @@ def pre_processing(
     Returns:
                 path: str - the location of the output file
     '''
-    
+    # ── Setup output path and initialize video source ──────────────────
     out_path, out_name = sanitize_output_path(Out_Path, Out_Name)
     
     # Construct the output file
@@ -195,6 +214,9 @@ def pre_processing(
     
     # Create an array to store the image data
     # This array will be saved to the output file at the end
+    # ── Allocate output arrays ─────────────────────────────────────────
+    # image_data holds the processed frame stack (y, x, frames) as uint8.
+    # times holds the camera timestamp in seconds for each sampled frame.
     image_data = np.empty((y_res, x_res, out_frames), dtype=np.uint8)
     
     times = np.empty(out_frames, dtype=np.float64)
@@ -203,7 +225,9 @@ def pre_processing(
     
     ############################# Edit precalculations #############################
 
-    
+    # ── Pre-calculate values needed before the main frame loop ─────────
+    # Background threshold, RSS center, and drift shift arrays are computed
+    # once here so they are ready when the per-frame loop runs below.
     if Bkgrnd_Crop:
         
         # Get the first of the video
@@ -255,7 +279,9 @@ def pre_processing(
 
     ############################# Perform Edits #############################
 
-
+    # ── Main per-frame processing loop ────────────────────────────────
+    # Each sampled frame is loaded, all enabled corrections are applied
+    # in order, then stored into image_data. Progress is printed every 1%.
     for fdx, i in enumerate(frames_to_sample):
         video.set(cv.CAP_PROP_POS_FRAMES, i)
         ret, frame = video.read()
@@ -333,6 +359,10 @@ def pre_processing(
         
         
     # Open the output file
+    # ── Write output HDF5 file ─────────────────────────────────────────
+    # Saves the processed frame stack, timestamps, video metadata,
+    # and all preprocessing settings as dataset attributes.
+    # Settings are saved so any future run can be reproduced exactly.
     with h5.File(out_name, 'w') as out_file:
         
         data_group = out_file.create_group('data')
@@ -560,6 +590,16 @@ def remove_white(frame: np.ndarray, thresh: float) -> np.ndarray:
 
 
 def filter_high_intensity(frame: np.ndarray, thresh: float) -> np.ndarray:
+    """
+    Zero out all pixel values above the given threshold.
+    Used to suppress saturated bright spots before center detection.
+
+    Args:
+        frame: Grayscale numpy array
+        thresh: Pixel value threshold — values above this are set to 0
+
+    Returns: numpy array with high-intensity pixels zeroed
+    """
     
     new_frame = frame.copy()
     
@@ -1043,6 +1083,15 @@ def scale_image(image, Z):
 
 
 def fake_hdr(image: np.ndarray) -> np.ndarray:
+    """
+    Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to enhance
+    local contrast in a grayscale frame, simulating an HDR effect.
+
+    Args:
+        image: Grayscale uint8 numpy array
+
+    Returns: Contrast-enhanced uint8 numpy array
+    """
     
     # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
     clahe = cv.createCLAHE(clipLimit=2.0, tileGridSize=(5, 5))
@@ -1053,6 +1102,16 @@ def fake_hdr(image: np.ndarray) -> np.ndarray:
 
 
 def fake_hdr_gamma(image, gamma=1.5):
+    """
+    Apply power-law gamma correction to simulate HDR enhancement.
+    Values are normalized to [0, 1], raised to the gamma power, then rescaled.
+
+    Args:
+        image: Grayscale uint8 numpy array
+        gamma: Gamma exponent — values > 1 darken, values < 1 brighten
+
+    Returns: Gamma-corrected uint8 numpy array
+    """
     
     # Apply gamma correction
     gamma_corrected_image = np.power(image / 255.0, gamma)

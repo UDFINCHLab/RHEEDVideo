@@ -1,3 +1,20 @@
+"""
+PCA pipeline — pca.py
+
+Reads preprocessed image frames from an HDF5 file, applies StandardScaler
+normalization, runs Principal Component Analysis to reduce dimensionality,
+and writes the results back into the same HDF5 file under the 'pca' group.
+
+Outputs saved per run:
+    - Eigenvalues (frame scores on each component) — used as K-Means input
+    - Eigenvectors (spatial modes reshaped to original frame dimensions)
+    - Explained variance per component and total
+    - Scaler parameters (mean, std, var) for inverse transforms
+
+Run directly to run PCA on the latest H5 file in results/pre_processing/.
+
+Dependencies: h5py, NumPy, scikit-learn
+"""
 import h5py as h5
 import numpy as np
 from sklearn.preprocessing import StandardScaler
@@ -9,7 +26,10 @@ from typing import Optional
 
 
 
-
+# ── Default settings (used when running this file directly) ───────────
+# PCA_COMPONENTS: number of principal components to extract.
+# 6 is a good starting point for RHEED data — increase if explained
+# variance is low, decrease to reduce noise sensitivity.
 INPUT_FILE = '' # Path/File.h5
 PCA_COMPONENTS = 6
 
@@ -74,6 +94,10 @@ def pca(Input_File: str, PCA_Components: int) -> None:
     ############################ Perform PCA ############################
     print('Performing PCA')
     
+    # ── Reshape, normalize, and run PCA ───────────────────────────────
+    # Frames are reshaped from (y, x, frames) → (frames, pixels) so each
+    # row is one observation and each column is one pixel feature.
+    # StandardScaler normalizes each pixel to mean=0, std=1 before PCA.
     reshaped_data = np.reshape(image_data, (img_height*img_width, total_frames)).T
     
     # Normalize the data
@@ -94,7 +118,10 @@ def pca(Input_File: str, PCA_Components: int) -> None:
     print('PCA Complete')
 
     ############################ Save the results ############################
-    
+    # ── Write PCA results back into the HDF5 file ─────────────────────
+    # Any existing 'pca' group is deleted and replaced.
+    # Scaler parameters are saved so eigenvectors can be inverse-transformed
+    # back to pixel space for visualization if needed.
     with h5.File(Input_File, 'r+') as file:
         
         ########### Save the PCA results ###########

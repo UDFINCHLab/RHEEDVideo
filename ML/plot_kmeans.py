@@ -1,3 +1,20 @@
+"""
+K-Means results plotting — plot_kmeans.py
+
+Reads K-Means clustering results from an HDF5 file and generates
+two types of publication-quality plots for each k value:
+
+    1. Cluster trajectory — scatter plot of cluster label vs. time,
+       showing how the RHEED pattern evolves during deposition.
+
+    2. Centroid images — mean RHEED frame for each cluster,
+       saved as individual PNG files using a custom green colormap.
+
+All plots are saved to the specified output directory under k=N/ subfolders.
+Run directly to plot the latest H5 file in results/pre_processing/.
+
+Dependencies: h5py, NumPy, Matplotlib
+"""
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
@@ -8,7 +25,9 @@ from os import makedirs
 from typing import Optional, cast, Any
 
 
-
+# ── Default settings (used when running this file directly) ───────────
+# FIG_SIZE: figure dimensions in inches for cluster trajectory plots.
+# (7, 3) is suitable for single-column journal figures.
 INPUT_FILE = ''
 OUT_PATH = ''
 
@@ -20,6 +39,17 @@ def plot_k_means(Input_File: str,
                  Out_Path: str,
                  Fig_size: tuple[float,float]=(7,3), 
                  show: bool=False) -> None:
+    """
+    Main entry point — load K-Means results from H5 and generate all plots.
+    Reads cluster labels and centroid images for every k value stored in
+    the file, then calls plot_all_clusters and plot_all_centroids.
+
+    Args:
+        Input_File: Path to the HDF5 file containing 'kmeans' and 'data' groups
+        Out_Path:   Root directory for saving plot output files
+        Fig_size:   Figure size in inches for cluster trajectory plots
+        show:       If True, display each figure interactively before saving
+    """
 
     plt.rc('font', family='Times New Roman', weight='bold', size=8)
     
@@ -61,6 +91,10 @@ def plot_k_means(Input_File: str,
 
 
 def plot_all_centroids(centroids_list: list[np.ndarray], out_path: str, show: bool=False) -> None:
+    """
+    Save centroid images for all k values.
+    Creates a k=N/ subfolder for each k and calls plot_centroids for each.
+    """
     
     for i, centroids in enumerate(centroids_list):
         k = centroids.shape[-1]
@@ -72,6 +106,16 @@ def plot_all_centroids(centroids_list: list[np.ndarray], out_path: str, show: bo
 
 
 def plot_centroids(centroids: np.ndarray, path: str, fig_size: Optional[tuple[float, float]]=None, show: bool=False) -> None:
+    """
+    Save one centroid image per cluster as a high-resolution PNG (1000 dpi).
+    Each image uses the custom black-green-white colormap for RHEED visualization.
+
+    Args:
+        centroids: Array of shape (y, x, k) — one mean frame image per cluster
+        path:      Output directory for this k value
+        fig_size:  Optional figure size override
+        show:      If True, display interactively before saving
+    """
     
     
     num_clusters = centroids.shape[-1]
@@ -93,6 +137,10 @@ def plot_centroids(centroids: np.ndarray, path: str, fig_size: Optional[tuple[fl
 
 
 def plot_all_clusters(labels_list: list[np.ndarray], times: np.ndarray, fig_size: tuple[float, float], save_path: str, show: bool=False) -> None:
+    """
+    Save cluster trajectory plots for all k values.
+    Creates a k=N/ subfolder for each k and calls plot_kmeans for each.
+    """
     if save_path[-1] != '/':
         save_path += '/'
         
@@ -108,6 +156,18 @@ def plot_all_clusters(labels_list: list[np.ndarray], times: np.ndarray, fig_size
 
 def plot_kmeans(labels: np.ndarray, times: np.ndarray, fig_size: tuple[float, float],
                 save_path: str, show: bool=False) -> None:
+    """
+    Generate and save a cluster vs. time scatter plot for one k value.
+    Points are colored by cluster index using the viridis colormap.
+    Time axis is always converted to hours for consistency.
+
+    Args:
+        labels:     1D array of cluster labels per frame (0-indexed)
+        times:      1D array of frame timestamps in seconds
+        fig_size:   Figure dimensions in inches
+        save_path:  Directory to save the output PNG
+        show:       If True, display interactively before saving
+    """
         
     # If the labels start at 0, add 1 to all labels
     if min(labels) == 0:
@@ -191,6 +251,16 @@ def plot_kmeans(labels: np.ndarray, times: np.ndarray, fig_size: tuple[float, fl
 
 
 def sort_clusters(cluster_labels: np.ndarray) -> np.ndarray:
+    """
+    Renumber cluster labels by order of first appearance (1-indexed).
+    Cluster 1 is the first pattern seen in the video, cluster 2 is the
+    second new pattern, and so on.
+
+    Args:
+        cluster_labels: 1D numpy array of integer cluster labels
+
+    Returns: 1D numpy array with labels renumbered starting from 1
+    """
 
     # Dictionary to store the first occurrence index of each label
     first_occurrence = {}
@@ -225,6 +295,11 @@ def scale_times(times: np.ndarray) -> tuple[np.ndarray, str]:
 
 
 def adjustments(fig_size: tuple[float,float])-> list[float]:
+    """
+    Return subplot margin adjustments for a given figure size.
+    Values are [left, bottom, right, top, wspace, hspace, y_title, x_title].
+    Used to fine-tune layout for publication-ready figures at specific sizes.
+    """
     #              L,     B,     R,     T,     WS,    HS,    YT,     XT
     if fig_size == (7, 2):
         adjusts = [0.06,  0.2,   0.99,  0.88,  0.2,   0.2,   -0.035, 0.00]
@@ -249,7 +324,11 @@ def adjustments(fig_size: tuple[float,float])-> list[float]:
 
 
 
-
+# ── Custom colormaps ───────────────────────────────────────────────────
+# au_color_map:       blue → orange (Auburn University palette)
+# rwb_color_map:      blue → white → red (diverging, for eigenvectors)
+# centroid_color_map: black → green → white (for RHEED centroid images)
+# train/val/test/background_color: consistent plot colors across all figures
 def au_color_map() -> LinearSegmentedColormap:
     # Define the RGB values for the start and end colors
     start_color = (11/255, 35/255, 65/255)  # Blue
