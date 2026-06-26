@@ -389,6 +389,8 @@ def main():
     ml_capture = False
     ml_writer_color = None
     color_file = None
+    ts_file = None
+    ts_writer = None
     ml_frame_count = 0
     ml_toggle_request = False
     record_start_time = None
@@ -610,8 +612,11 @@ def main():
 
                         if ml_writer_color is not None and ml_writer_color.isOpened():
                             ml_writer_color.write(color_frame)
+                            # ── ③ write timestamp row ──
+                            if ts_writer is not None:
+                                wall = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+                                ts_writer.write(f"{ml_frame_count},{wall},{now:.6f}\n")
                             ml_frame_count += 1
-
                     except Exception as e:
                         print("Video write warning:", e)
 
@@ -1157,10 +1162,18 @@ def main():
 
                             print(f"📥 ML capture STARTED")
                             print(f"   COLOR → {color_file}")
+                            ts_file = color_file.parent / (color_file.stem.replace("_color", "") + "_timestamps.csv")
+                            ts_writer = open(ts_file, "w")
+                            ts_writer.write("frame_number,wall_clock_timestamp,camera_elapsed_s\n")
                 else:
                     # stop capture (NO ML PROCESSING)
                     if ml_writer_color is not None:
                         ml_writer_color.release()
+                        if ts_writer is not None:
+                            ts_writer.flush()
+                            ts_writer.close()
+                        ts_writer = None
+                        ts_file = None
 
                         record_duration = time.time() - record_start_time if record_start_time else 0
                         encoded_duration = ml_frame_count / actual_fps if actual_fps > 0 else 0
@@ -1193,6 +1206,9 @@ def main():
         
         if ml_writer_color is not None:
             ml_writer_color.release()
+            
+        if ts_writer is not None:
+            ts_writer.close()    
 
         if color_file is not None:
             print("\n📤 ML capture STOPPED")
